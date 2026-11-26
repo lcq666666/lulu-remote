@@ -52,7 +52,7 @@ jobs:
   # --- 2. Windows: launcher exe + two Inno Setup installers --------------
   build-windows:
     needs: test
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
@@ -62,10 +62,13 @@ jobs:
       - name: Build launcher (Windows)
         working-directory: launcher
         run: |
-          flutter pub get
+          flutter create --platforms=windows --project-name=lulu_remote .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           flutter build windows --release
       - name: Fetch Moonlight + Sunshine (verify hashes, fetch LICENSEs)
         run: powershell -ExecutionPolicy Bypass -File installer\scripts\fetch-components.ps1
+        env:
+          GH_TOKEN: ${{ github.token }}
       - name: Install Inno Setup
         run: choco install innosetup -y
       - name: Build client installer (LULU + Moonlight + Tailscale)
@@ -108,6 +111,9 @@ jobs:
           fi
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      - name: Generate missing Android runner files
+        working-directory: launcher
+        run: flutter create --platforms=android --org=com.lulu --project-name=remote --no-pub .
       - name: Build APK (release, signed — only if keystore secrets exist)
         if: ${{ steps.keystore.outputs.configured == 'true' }}
         working-directory: launcher
@@ -126,7 +132,7 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      - name: Build APK (debug, unsigned — no keystore configured)
+      - name: Build APK (debug — no release keystore configured)
         if: ${{ steps.keystore.outputs.configured == 'false' }}
         working-directory: launcher
         run: |

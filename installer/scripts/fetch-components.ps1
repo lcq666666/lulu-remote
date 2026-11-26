@@ -42,7 +42,9 @@ function Get-ReleaseAsset {
     $api = "https://api.github.com/repos/$Repo/releases/tags/$Tag"
     Write-Host "Looking up $Repo $Tag ..."
     try {
-        $rel = Invoke-RestMethod -Uri $api -Headers @{ 'User-Agent' = 'LULU-Remote-CI' }
+        $headers = @{ 'User-Agent' = 'LULU-Remote-CI' }
+        if ($env:GH_TOKEN) { $headers.Authorization = "Bearer $env:GH_TOKEN" }
+        $rel = Invoke-RestMethod -Uri $api -Headers $headers
     } catch {
         throw "GitHub releases API failed for $Repo $Tag : $($_.Exception.Message)"
     }
@@ -53,6 +55,9 @@ function Get-ReleaseAsset {
     }
     Write-Host "Downloading $($asset.name) from $($asset.browser_download_url) ..."
     Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $OutFile -Headers @{ 'User-Agent' = 'LULU-Remote-CI' }
+    if ($asset.digest -notmatch '^sha256:([0-9a-f]{64})$' -or (Get-Sha256 $OutFile) -ne $Matches[1]) {
+        throw "SHA-256 verification failed for $($asset.name)."
+    }
     return $asset
 }
 
@@ -84,14 +89,14 @@ $manifest += ''
 # --- Sunshine (bundled, GPL-3.0) ---
 # The release lives under both LizardByte/Sunshine and SunshineStream/Sunshine
 # (org rename); try the old name first, then the new one.
-$sunshineFile = Join-Path $VendorDir 'Sunshine-Windows-Installer.exe'
+$sunshineFile = Join-Path $VendorDir 'Sunshine-Windows-AMD64-installer.msi'
 $sunshineAsset = $null
 foreach ($repo in @('LizardByte/Sunshine', 'SunshineStream/Sunshine')) {
     try {
         $sunshineAsset = Get-ReleaseAsset `
             -Repo $repo `
             -Tag "v$SunshineVersion" `
-            -Pattern '*Windows*Installer*.exe' `
+            -Pattern 'Sunshine-Windows-AMD64-installer.msi' `
             -OutFile $sunshineFile
         break
     } catch {
@@ -105,7 +110,7 @@ $sunshineSha = Get-Sha256 $sunshineFile
 $manifest += '## Sunshine'
 $manifest += "- Version: v$SunshineVersion"
 $manifest += "- Release asset (original name): $($sunshineAsset.name)"
-$manifest += "- Saved as: Sunshine-Windows-Installer.exe"
+$manifest += "- Saved as: Sunshine-Windows-AMD64-installer.msi"
 $manifest += "- Download URL: $($sunshineAsset.browser_download_url)"
 $manifest += "- SHA-256: $sunshineSha"
 $manifest += '- License: GPL-3.0 — https://github.com/LizardByte/Sunshine'

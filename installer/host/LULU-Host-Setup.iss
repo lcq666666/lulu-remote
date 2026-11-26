@@ -15,10 +15,6 @@
 ;   1. installer\scripts\fetch-components.ps1   (fills installer\vendor\)
 ;   2. iscc installer\host\LULU-Host-Setup.iss
 ;
-; NOT compiled yet: no Inno Setup on the Linux VM this was written on.
-; Silent switches (/VERYSILENT) assume Sunshine's installer is Inno
-; Setup based — if CI's iscc run fails on it, check the vendor
-; installer's actual silent switches first.
 
 #define AppVersion "0.1.0"
 
@@ -49,7 +45,7 @@ Name: "chs"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 [Files]
 ; Sunshine installer, bundled (downloaded by fetch-components.ps1).
 ; Kept under {app}\vendor\ so it can be re-run by hand if needed.
-Source: "..\vendor\Sunshine-Windows-Installer.exe"; DestDir: "{app}\vendor"; Flags: ignoreversion
+Source: "..\vendor\Sunshine-Windows-AMD64-installer.msi"; DestDir: "{app}\vendor"; Flags: ignoreversion
 ; Tailscale download script (runs at install time, downloads from Tailscale).
 Source: "..\scripts\install-tailscale.ps1"; DestDir: "{app}\vendor"; Flags: ignoreversion
 ; Host finalize script (firewall + start Sunshine).
@@ -77,7 +73,7 @@ end;
 
 [Run]
 ; Sunshine, silent. Skipped if already installed.
-Filename: "{app}\vendor\Sunshine-Windows-Installer.exe"; Parameters: "/VERYSILENT /NORESTART /SUPPRESSMSGBOXES"; StatusMsg: "正在安装 Sunshine…"; Check: not SunshineInstalled; Flags: waituntilterminated
+Filename: "{sys}\msiexec.exe"; Parameters: "/i ""{app}\vendor\Sunshine-Windows-AMD64-installer.msi"" /qn /norestart"; StatusMsg: "正在安装 Sunshine…"; Check: not SunshineInstalled; Flags: waituntilterminated
 ; Tailscale, downloaded + SHA-256 verified + silently installed by script.
 Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -NoProfile -File ""{app}\vendor\install-tailscale.ps1"""; StatusMsg: "正在安装 Tailscale（从官网下载并校验）…"; Check: not TailscaleInstalled; Flags: waituntilterminated
 ; Firewall rules + start Sunshine.

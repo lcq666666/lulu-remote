@@ -38,7 +38,7 @@ installer/
     finalize-host.ps1      被控端装完收尾：放行防火墙、启动 Sunshine
   vendor/                  CI 下载来的文件（不在仓库里，构建时生成）
     MoonlightSetup-6.2.0.exe
-    Sunshine-Windows-Installer.exe
+    Sunshine-Windows-AMD64-installer.msi
     licenses/              Moonlight / Sunshine 的 LICENSE 全文
     MANIFEST.md            实际下载的文件名、版本、SHA-256
 ```

@@ -9,7 +9,7 @@
 |---|---|---|---|---|---|
 | LULU 启动器（Flutter） | 0.1.0（本仓库 `launcher/`，`pubspec.yaml`） | — | MIT（壳子）；`lib/pairing/` 单独 GPL-3.0 | 本仓库 | CI 编译 `flutter build windows`，exe + DLL + data 直接装进安装包 |
 | Moonlight Qt（Windows 控制端） | **v6.2.0** | 2026-10-04 | GPL-3.0 | https://github.com/moonlight-stream/moonlight-qt/releases/tag/v6.2.0 | CI 下载后**随包分发**：`installer/vendor/MoonlightSetup-6.2.0.exe`，安装时静默运行 |
-| Sunshine（Windows 被控端） | **v2026.914.233613** | 2026-09-14 | GPL-3.0 | https://github.com/LizardByte/Sunshine/releases/tag/v2026.914.233613（仓库已改名 SunshineStream/Sunshine，同一 release） | CI 下载后**随包分发**：`installer/vendor/Sunshine-Windows-Installer.exe`，安装时静默运行 |
+| Sunshine（Windows 被控端） | **v2026.914.233613** | 2026-09-14 | GPL-3.0 | https://github.com/LizardByte/Sunshine/releases/tag/v2026.914.233613（仓库已改名 SunshineStream/Sunshine，同一 release） | CI 下载后**随包分发**：`installer/vendor/Sunshine-Windows-AMD64-installer.msi`，安装时静默运行 |
 | Tailscale（Windows 组网） | **1.104.7** | 2026-11-12 | BSD-3-Clause（开源客户端/守护进程）；官方 Windows 图形客户端是独立产品 | https://tailscale.com/download/windows；源码 https://github.com/tailscale/tailscale | **不随包分发，安装时从官网下载**：`https://pkgs.tailscale.com/stable/tailscale-setup-1.104.7-amd64.msi`，下载完校验 SHA-256 再装 |
 | Moonlight Android（手机控制端） | v12.2（`com.limelight`） | 2026-09 | GPL-3.0 | https://github.com/moonlight-stream/moonlight-android | 不进 APK；LULU 首次打开一键跳转 Play 商店安装 |
 | Tailscale Android（手机组网） | 最新稳定版（`com.tailscale.ipn`） | — | BSD-3-Clause（客户端） | https://tailscale.com/download/android | 不进 APK；LULU 首次打开一键跳转 Play 商店安装 |
@@ -23,7 +23,7 @@
 |---|---|---|
 | `tailscale-setup-1.104.7-amd64.msi` | `676b5b32fdd1aeaee90d8e8f38e222635b216fbdfbf877bf01cb1d7cda330ec5` | winget 清单里的官方 MSI 校验值（二次来源）。**安装脚本和 CI 取包脚本都会重新算一遍，不一致就停下不装**，以官网文件为准 |
 | `MoonlightSetup-6.2.0.exe` | 待构建时填 | CI 下载后算出，写进 `installer/vendor/MANIFEST.md` |
-| `Sunshine-Windows-Installer.exe` | 待构建时填 | CI 下载后算出，写进 `installer/vendor/MANIFEST.md` |
+| `Sunshine-Windows-AMD64-installer.msi` | 由构建记录 | CI 对照官方 release 校验后写进 `installer/vendor/MANIFEST.md` |
 
 ## 为什么 Tailscale 不随包分发
 
