@@ -94,8 +94,8 @@ class ClientIdentity {
         ),
       );
     final pair = generator.generateKeyPair();
-    final privateKey = pair.privateKey as RSAPrivateKey;
-    final publicKey = pair.publicKey as RSAPublicKey;
+    final privateKey = pair.privateKey;
+    final publicKey = pair.publicKey;
     final certDer = _buildSelfSignedCert(privateKey, publicKey);
     final keyPem = derToPem(_buildPkcs8(privateKey), 'PRIVATE KEY');
     return ClientIdentity(

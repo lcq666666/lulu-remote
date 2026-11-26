@@ -65,7 +65,7 @@ Uint8List aesEcb(Uint8List key, Uint8List data, {required bool encrypt}) {
 Uint8List rsaSignSha256(RSAPrivateKey key, Uint8List data) {
   final signer = RSASigner(SHA256Digest(), '0609608648016503040301')
     ..init(true, PrivateKeyParameter<RSAPrivateKey>(key));
-  return (signer.generateSignature(data) as RSASignature).bytes;
+  return signer.generateSignature(data).bytes;
 }
 
 /// RSA PKCS#1 v1.5, SHA-256 verification against a public key parsed
