@@ -71,7 +71,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Install Inno Setup
-        run: choco install innosetup -y
+        shell: pwsh
+        run: |
+          choco install innosetup --version=6.7.1 -y
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $language = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/Languages/ChineseSimplified.isl'
+          Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/jrsoftware/issrc/is-6_7_1/Files/Languages/Unofficial/ChineseSimplified.isl' -OutFile $language
       - name: Build client installer (LULU + Moonlight + Tailscale)
         run: iscc installer\client\LULU-Remote-Setup.iss
       - name: Build host installer (Sunshine + Tailscale)
