@@ -49,7 +49,7 @@ jobs:
         working-directory: launcher
         run: flutter test
 
-  # --- 2. Windows: launcher exe + two Inno Setup installers --------------
+  # --- 2. Windows: one installer for both roles -------------------------
   build-windows:
     needs: test
     runs-on: windows-2022
@@ -77,17 +77,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $language = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/Languages/ChineseSimplified.isl'
           Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/jrsoftware/issrc/is-6_7_1/Files/Languages/Unofficial/ChineseSimplified.isl' -OutFile $language
-      - name: Build client installer (LULU + Moonlight + Tailscale)
+      - name: Build LULU Windows installer
         run: iscc installer\client\LULU-Remote-Setup.iss
-      - name: Build host installer (Sunshine + Tailscale)
-        run: iscc installer\host\LULU-Host-Setup.iss
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
           name: windows-installers
           path: |
             installer/dist/LULU-Remote-Setup-*.exe
-            installer/dist/LULU-Host-Setup-*.exe
             installer/vendor/MANIFEST.md
           if-no-files-found: error
 
@@ -168,12 +165,19 @@ jobs:
             dist/android-apk/*.apk
             dist/windows-installers/MANIFEST.md
           body: |
-            LULU Remote — one-click installers. Download, double-click,
-            Next-Next-Finish. No Flutter / Visual Studio / Android SDK
-            needed to use it.
-            - LULU-Remote-Setup-*.exe — control-side PC (LULU + Moonlight Qt + Tailscale)
-            - LULU-Host-Setup-*.exe — run once on EACH remote PC (Sunshine + Tailscale)
-            - *.apk — Android phone (LULU only; Moonlight + Tailscale install from Play Store on first run)
-            Component versions, SHA-256 and licences: see MANIFEST.md in this release.
+            ### Windows
+
+            下载 `LULU-Remote-Setup-*.exe`。每台电脑用同一个安装包。
+            要让这台电脑接受远程连接，打开「这台电脑」，点「允许远程控制」，按提示设置管理账号。
+            要连接别的电脑，在「我的电脑」添加对方电脑的地址。同一 Wi-Fi 下可用局域网地址。
+            「这台电脑」里也可以开启登录 Windows 后自动启动。
+
+            ### Android
+
+            下载 APK 并在手机上安装。`app-debug.apk` 使用调试签名。
+            手机仍需安装 Moonlight，并在里面完成首次配对。跨网连接还需要配置组网。
+
+            组件版本、校验值和许可信息见 `MANIFEST.md`。
+          fail_on_unmatched_files: true
           draft: false
           prerelease: false

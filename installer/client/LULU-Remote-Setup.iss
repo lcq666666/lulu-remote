@@ -1,11 +1,11 @@
-; LULU-Remote-Setup.iss — LULU Remote client installer (control-side PC).
+; LULU-Remote-Setup.iss — unified Windows installer.
 ;
-; One installer, Next-Next-Finish. Installs, in order:
+; One installer for controlling other computers and enabling this host.
+; The front end installs first. Components are prepared when requested.
 ;   1. LULU Remote launcher itself (Flutter build output).
 ;   2. Moonlight Qt v6.2.0 (bundled, GPL-3.0 — see licenses\ in the app folder).
-;   3. Tailscale 1.104.7 (downloaded at install time from Tailscale's own
-;      servers, SHA-256 verified — see installer/VERSIONS.md for why it
-;      is not bundled).
+;   3. Sunshine (bundled, GPL-3.0).
+; Optional cross-network setup can download Tailscale after installation.
 ;
 ; Build: CI only (see .github/workflows/build.yml):
 ;   1. flutter build windows --release
@@ -16,11 +16,6 @@
 ; after install) so LULU's first-run wizard can re-run them later if
 ; a component failed or was removed.
 ;
-; NOT compiled yet: no Inno Setup on the Linux VM this was written on.
-; Silent switches (/VERYSILENT) assume Moonlight's and Sunshine's
-; installers are Inno Setup based — if CI's iscc run fails on them,
-; check the vendor installers' actual silent switches first.
-
 #define AppVersion "0.1.0"
 #define MoonlightSetup "MoonlightSetup-6.2.0.exe"
 
@@ -39,6 +34,7 @@ OutputBaseFilename=LULU-Remote-Setup-{#AppVersion}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+RestartIfNeededByRun=no
 UninstallDisplayName=LULU Remote
 LicenseFile=..\licenses\LULU-LICENSE.txt
 ; The installer is unsigned in v1 — Windows SmartScreen will warn on
@@ -57,11 +53,14 @@ Source: "..\..\launcher\build\windows\x64\runner\Release\*"; DestDir: "{app}"; F
 ; Moonlight Qt installer, bundled (downloaded by fetch-components.ps1).
 ; Kept under {app}\vendor\ so the first-run wizard can re-run it.
 Source: "..\vendor\MoonlightSetup-6.2.0.exe"; DestDir: "{app}\vendor"; Flags: ignoreversion
+Source: "..\vendor\Sunshine-Windows-AMD64-installer.msi"; DestDir: "{app}\vendor"; Flags: ignoreversion
+Source: "..\scripts\prepare-host.ps1"; DestDir: "{app}\vendor"; Flags: ignoreversion
 ; Tailscale download script (runs at install time, downloads from Tailscale).
 Source: "..\scripts\install-tailscale.ps1"; DestDir: "{app}\vendor"; Flags: ignoreversion
 ; Third-party licences + source offers (GPL compliance).
 Source: "..\vendor\licenses\*"; DestDir: "{app}\licenses"; Flags: ignoreversion recursesubdirs
 Source: "..\licenses\MOONLIGHT-SOURCE-OFFER.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "..\licenses\SUNSHINE-SOURCE-OFFER.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "..\licenses\TAILSCALE-NOTICE.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "..\vendor\MANIFEST.md"; DestDir: "{app}\licenses"; Flags: ignoreversion
 
@@ -70,29 +69,5 @@ Name: "{group}\LULU Remote"; Filename: "{app}\lulu_remote.exe"
 Name: "{group}\{cm:UninstallProgram,LULU Remote}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\LULU Remote"; Filename: "{app}\lulu_remote.exe"; Tasks: desktopicon
 
-[Code]
-function MoonlightInstalled: Boolean;
-begin
-  Result := FileExists('C:\Program Files\Moonlight\moonlight-qt.exe')
-    or FileExists('C:\Program Files (x86)\Moonlight\moonlight-qt.exe')
-    or FileExists(ExpandConstant('{localappdata}\Programs\Moonlight\moonlight-qt.exe'));
-end;
-
-function TailscaleInstalled: Boolean;
-begin
-  Result := FileExists('C:\Program Files\Tailscale\tailscale.exe');
-end;
-
 [Run]
-; Moonlight Qt, silent. Skipped if already installed.
-Filename: "{app}\vendor\MoonlightSetup-6.2.0.exe"; Parameters: "/VERYSILENT /NORESTART /SUPPRESSMSGBOXES"; StatusMsg: "正在安装 Moonlight Qt…"; Check: not MoonlightInstalled; Flags: waituntilterminated
-; Tailscale, downloaded + SHA-256 verified + silently installed by script.
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -NoProfile -File ""{app}\vendor\install-tailscale.ps1"""; StatusMsg: "正在安装 Tailscale（从官网下载并校验）…"; Check: not TailscaleInstalled; Flags: waituntilterminated
-; Offer to launch LULU at the end. Tailscale sign-in happens from the
-; Tailscale tray icon; LULU's setup checklist shows whether it is up.
 Filename: "{app}\lulu_remote.exe"; Description: "运行 LULU 远程"; Flags: nowait postinstall skipifsilent
-
-[UninstallRun]
-; Uninstall removes LULU itself only. Moonlight and Tailscale are left
-; installed on purpose — other software may use them, and silently
-; removing someone's VPN is not something an uninstaller should do.

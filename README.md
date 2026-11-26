@@ -11,23 +11,22 @@
 
 ## 用户安装（一键安装，不用装开发工具）
 
-用户只下载成品安装包，双击后一路“下一步”装完即用。
+每台 Windows 电脑安装同一个 LULU 安装包。要让别人控制这台电脑，在「这台电脑」中点「允许远程控制」，设置本机管理账号，再复制电脑地址。要控制对方的电脑，在「我的电脑」里添加对方的地址。同一 Wi-Fi 下用局域网地址。跨网连接可在连接设置里准备所需组件。
 **Flutter、Visual Studio、Android SDK、Inno Setup 只是做 LULU 需要的工具，
 只在 GitHub Actions 里用；用 LULU 的人一个都不用装。**
 
 | 文件 | 给谁用 | 里面有什么 |
 |---|---|---|
-| `LULU-Remote-Setup-0.1.0.exe` | 控制端 Windows 电脑 | LULU 启动器 + Moonlight Qt（随包）+ Tailscale（安装时从官网下载并校验） |
-| `LULU-Host-Setup-0.1.0.exe` | 被控端 Windows 电脑（两台远端电脑，每台跑一次） | Sunshine（随包）+ Tailscale（安装时从官网下载并校验），装完自动打开 Sunshine 网页建管理员账号 |
+| `LULU-Remote-Setup-0.1.0.exe` | 所有 Windows 电脑 | LULU 界面及控制、被控组件，首次使用对应功能时准备组件 |
 | `LULU-Remote-0.1.0.apk` | 安卓手机 | 只有 LULU 启动器；首次打开一键跳转 Play 商店装 Moonlight 和 Tailscale（安卓不允许静默装别的应用，跳转后由你点一下确认） |
 
-三个文件都在 GitHub Releases 里（打 `v*` 标签时自动发布）。
+安装包可以从 GitHub Actions 的构建产物下载（打 `v*` 标签时自动发布到 GitHub Releases）。
 钉住的版本号、下载地址、SHA-256 见 `installer/VERSIONS.md`。
 
 ## 目录
 
 - `launcher/` — Flutter 启动器（Windows + Android 同一份代码）
-- `installer/` — 一键安装包：Inno Setup 脚本（客户端 + 被控端）、取包脚本、钉住的版本清单
+- `installer/` — Windows 安装包、取包脚本、钉住的版本清单
 - `.github/workflows/build.yml` — CI：编译 Flutter、做安装包、发 Release（唯一出正式安装包的地方）
 - `scripts/host-setup/` — 被控端手动一键配置脚本（安装包的等价手动版）
 - `docs/` — 调研结论、许可清单、待拍板事项

@@ -13,8 +13,7 @@ import '../models/device.dart';
 /// by design (GameStream discovery). No secret is sent here.
 class MeshStatusService {
   Future<HostStatus> check(Device device) async {
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 3);
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 3);
     try {
       final request = await client.getUrl(
         Uri.parse('${device.nvhttpBase}/serverinfo?uniqueid=lulu-probe'),
@@ -42,7 +41,13 @@ class MeshStatusService {
   Future<String?> localMeshAddress() async {
     if (!Platform.isWindows) return null;
     try {
-      final result = await Process.run('tailscale', ['ip', '-4']);
+      final installed = File(
+        '${Platform.environment['ProgramFiles']}\\Tailscale\\tailscale.exe',
+      );
+      final result = await Process.run(
+        installed.existsSync() ? installed.path : 'tailscale',
+        ['ip', '-4'],
+      ).timeout(const Duration(seconds: 4));
       if (result.exitCode == 0) {
         return (result.stdout as String).trim().split('\n').first.trim();
       }

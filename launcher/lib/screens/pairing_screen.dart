@@ -135,8 +135,7 @@ class _PairingScreenState extends State<PairingScreen> {
         padding: const EdgeInsets.all(16),
         children: [
           const Text(
-            '不用打开 Moonlight。LULU 会在下面显示一个 4 位 PIN，'
-            '并自动把它提交给对方电脑的 Sunshine，全程都在这里完成。',
+            '首次连接时，使用对方电脑的管理账号授权配对。',
             style: TextStyle(color: LuluTheme.muted),
           ),
           const SizedBox(height: 16),
@@ -144,8 +143,8 @@ class _PairingScreenState extends State<PairingScreen> {
             controller: _userController,
             enabled: !_running,
             decoration: const InputDecoration(
-              labelText: 'Sunshine 管理员账号',
-              hintText: '第一次打开 https://对方地址:47990 时设置的账号',
+              labelText: '对方电脑的管理账号',
+              hintText: '在对方电脑的「这台电脑」页面设置',
             ),
           ),
           const SizedBox(height: 12),
@@ -154,7 +153,7 @@ class _PairingScreenState extends State<PairingScreen> {
             enabled: !_running,
             obscureText: true,
             decoration: const InputDecoration(
-              labelText: 'Sunshine 管理员密码',
+              labelText: '对方电脑的管理密码',
               hintText: '只存系统安全存储，不存明文文件',
             ),
           ),

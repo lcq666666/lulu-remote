@@ -5,12 +5,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/device.dart';
 
 /// Device list persistence (non-secret fields only).
-///
-/// v1 scope is 2 hosts, but the store itself holds N devices; the UI caps
-/// the add-device flow at 2 so the scope stays honest.
 class DeviceStore {
   static const _key = 'lulu_devices_v1';
-  static const maxDevices = 2;
 
   Future<List<Device>> load() async {
     final prefs = await SharedPreferences.getInstance();

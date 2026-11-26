@@ -34,8 +34,8 @@ class ComponentInstaller {
       Uri.parse('https://github.com/moonlight-stream/moonlight-qt/releases');
   static final _tailscaleDownload =
       Uri.parse('https://tailscale.com/download/windows');
-  static final _moonlightPlayStore = Uri.parse(
-      'https://play.google.com/store/apps/details?id=com.limelight');
+  static final _moonlightPlayStore =
+      Uri.parse('https://play.google.com/store/apps/details?id=com.limelight');
   static final _tailscalePlayStore = Uri.parse(
       'https://play.google.com/store/apps/details?id=com.tailscale.ipn');
 
@@ -71,24 +71,45 @@ class ComponentInstaller {
     return lines.join('\n');
   }
 
+  Future<String> prepareWindowsController() async {
+    return _installMoonlightWindows();
+  }
+
+  Future<void> prepareWindowsHost() async {
+    final script = _bundledFile('prepare-host.ps1');
+    if (script == null) throw StateError('请使用新版 LULU 安装包。');
+    final code = await _runElevated('powershell.exe', [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      '"$script"',
+    ]);
+    if (code != 0) {
+      throw StateError(code == 3010
+          ? '组件已安装，请在方便时重启电脑，再开启远程控制。'
+          : '开启失败。请确认已同意 Windows 管理员提示后重试（$code）。');
+    }
+  }
+
   Future<String> _installMoonlightWindows() async {
     final setup = _bundledFile(_moonlightSetupFile);
     if (setup == null) {
-      await launchUrl(_moonlightDownload,
-          mode: LaunchMode.externalApplication);
+      await launchUrl(_moonlightDownload, mode: LaunchMode.externalApplication);
       return 'Moonlight：安装包里没有自带安装文件，已打开官网下载页，请下载后安装。';
     }
-    final result = await _runElevated(setup, ['/VERYSILENT', '/NORESTART']);
+    final result = await _runElevated(setup, ['/quiet', '/norestart']);
     return result == 0
         ? 'Moonlight：已安装。'
-        : 'Moonlight：安装失败（退出码 $result），请重试或手动安装。';
+        : result == 3010
+            ? '连接组件已安装，请在方便时重启电脑。'
+            : '连接组件安装失败（退出码 $result），请重试。';
   }
 
   Future<String> _installTailscaleWindows() async {
     final script = _bundledFile(_tailscaleScriptFile);
     if (script == null) {
-      await launchUrl(_tailscaleDownload,
-          mode: LaunchMode.externalApplication);
+      await launchUrl(_tailscaleDownload, mode: LaunchMode.externalApplication);
       return 'Tailscale：安装包里没有自带脚本，已打开官网下载页，请下载后安装。';
     }
     final result = await _runElevated('powershell.exe', [
@@ -118,9 +139,7 @@ class ComponentInstaller {
         lines.add('Tailscale：已打开 Play 商店，点“安装”即可（安卓不允许静默安装）。');
       }
     }
-    return lines.isEmpty
-        ? '安卓端暂无可一键打开的组件。'
-        : lines.join('\n');
+    return lines.isEmpty ? '安卓端暂无可一键打开的组件。' : lines.join('\n');
   }
 
   /// The component installers the LULU installer keeps under
@@ -139,11 +158,13 @@ class ComponentInstaller {
   /// Returns the process exit code, or -1 if it could not be started.
   Future<int> _runElevated(String program, List<String> args) async {
     try {
-      final quoted = args.map((a) => "'$a'").join(',');
+      String quote(String value) => "'${value.replaceAll("'", "''")}'";
+      final quoted = args.map(quote).join(',');
       final result = await Process.run('powershell.exe', [
         '-NoProfile',
         '-Command',
-        "Start-Process -FilePath '$program' -ArgumentList $quoted -Verb RunAs -Wait -PassThru | Select-Object -ExpandProperty ExitCode",
+        'Start-Process -FilePath ${quote(program)} -ArgumentList $quoted '
+            '-Verb RunAs -WindowStyle Hidden -Wait -PassThru | Select-Object -ExpandProperty ExitCode',
       ]);
       return int.tryParse((result.stdout as String).trim()) ?? -1;
     } on ProcessException {

@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../app.dart';
 import '../models/device.dart';
 import '../models/quality_preset.dart';
+import '../services/component_installer.dart';
 import '../services/device_store.dart';
 import '../services/mesh_status_service.dart';
 import '../services/moonlight_launcher.dart';
@@ -16,6 +17,7 @@ import '../widgets/device_card.dart';
 import 'add_device_screen.dart';
 import 'pairing_screen.dart';
 import 'setup_checklist_screen.dart';
+import 'this_computer_screen.dart';
 
 /// Home: device list (2 hosts), quality presets, connect, mesh footer.
 class HomeScreen extends StatefulWidget {
@@ -35,7 +37,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Map<String, HostStatus> _status = {};
   QualityPreset _preset = QualityPreset.office1080;
   String? _connectingId;
-  String? _localMeshAddress;
   bool _loading = true;
   bool _saving = false;
 
@@ -47,11 +48,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _load() async {
     final devices = await _deviceStore.load();
-    final local = await _mesh.localMeshAddress();
     if (!mounted) return;
     setState(() {
       _devices = devices;
-      _localMeshAddress = local;
       _loading = false;
     });
     await _refreshStatus();
@@ -96,6 +95,14 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _connectWindows(Device device) async {
     if (await _mesh.check(device) != HostStatus.online) {
       throw const MoonlightLaunchException('无法连接 Sunshine，请检查网络、组网地址和端口。');
+    }
+    if (!mounted) return;
+    if (await _launcher.findMoonlightQt() == null) {
+      _snack('首次连接，正在准备连接组件…');
+      final result = await ComponentInstaller().prepareWindowsController();
+      if (await _launcher.findMoonlightQt() == null) {
+        throw MoonlightLaunchException(result);
+      }
     }
     if (!mounted) return;
     final process = await _launcher.streamWindows(device, _preset);
@@ -252,10 +259,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _openAddDevice([Device? existing]) async {
     if (_saving || _connectingId != null) return;
-    if (existing == null && _devices.length >= DeviceStore.maxDevices) {
-      _snack('v1 只支持 ${DeviceStore.maxDevices} 台电脑。');
-      return;
-    }
     final device = await Navigator.of(context).push<Device>(
       MaterialPageRoute(builder: (_) => AddDeviceScreen(device: existing)),
     );
@@ -322,6 +325,14 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _openSettings() {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => Platform.isWindows
+          ? const ThisComputerScreen()
+          : const SetupChecklistScreen(),
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -332,15 +343,9 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.checklist),
-            tooltip: '设置检查清单',
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => const SetupChecklistScreen(),
-                ),
-              );
-            },
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: Platform.isWindows ? '这台电脑与设置' : '设置',
+            onPressed: _openSettings,
           ),
           IconButton(
             icon: const Icon(Icons.refresh),
@@ -351,69 +356,96 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : Column(
-              children: [
-                _PresetBar(
-                  selected: _preset,
-                  onSelected: (p) => setState(() => _preset = p),
-                ),
-                Expanded(
-                  child: ListView(
-                    padding: const EdgeInsets.all(16),
-                    children: [
-                      Row(
-                        children: [
-                          const Text(
-                            '我的电脑',
-                            style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                              color: LuluTheme.text,
+          : LayoutBuilder(builder: (context, constraints) {
+              final wide = constraints.maxWidth >= 760;
+              final content = Column(
+                children: [
+                  if (_devices.isNotEmpty)
+                    _PresetBar(
+                      selected: _preset,
+                      onSelected: (p) => setState(() => _preset = p),
+                    ),
+                  Expanded(
+                    child: ListView(
+                      padding: const EdgeInsets.all(16),
+                      children: [
+                        Row(
+                          children: [
+                            const Text(
+                              '我的电脑',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: LuluTheme.text,
+                              ),
                             ),
-                          ),
-                          const Spacer(),
-                          Text(
-                            '${_devices.length} 台设备',
-                            style: const TextStyle(color: LuluTheme.muted),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      if (_devices.isEmpty) const Text('还没有电脑，点右下角添加。'),
-                      for (final device in _devices) ...[
-                        DeviceCard(
-                          device: device,
-                          preset: _preset,
-                          status: _status[device.id],
-                          connecting: _connectingId == device.id || _saving,
-                          onConnect: () => _connect(device),
-                          onPair: () => _openPairing(device),
-                          onEdit: _saving ? null : () => _openAddDevice(device),
-                          onDelete:
-                              _saving ? null : () => _deleteDevice(device),
-                          onDisconnect: Platform.isWindows && device.paired
-                              ? () => _disconnectWindows(device)
-                              : null,
-                          onAndroidHelp: Platform.isAndroid && device.paired
-                              ? () => _showAndroidHelp(device)
-                              : null,
+                            const Spacer(),
+                            ElevatedButton.icon(
+                              onPressed: _saving ? null : _openAddDevice,
+                              icon: const Icon(Icons.add),
+                              label: const Text('添加电脑'),
+                            ),
+                          ],
                         ),
                         const SizedBox(height: 12),
+                        if (_devices.isEmpty)
+                          const ListTile(
+                            leading: Icon(Icons.desktop_windows_outlined),
+                            title: Text('还没有添加电脑'),
+                            subtitle: Text('在要控制的电脑上打开 LULU，复制「这台电脑」里的地址。'),
+                          ),
+                        for (final device in _devices) ...[
+                          DeviceCard(
+                            device: device,
+                            preset: _preset,
+                            status: _status[device.id],
+                            connecting: _connectingId == device.id || _saving,
+                            onConnect: () => _connect(device),
+                            onPair: () => _openPairing(device),
+                            onEdit:
+                                _saving ? null : () => _openAddDevice(device),
+                            onDelete:
+                                _saving ? null : () => _deleteDevice(device),
+                            onDisconnect: Platform.isWindows && device.paired
+                                ? () => _disconnectWindows(device)
+                                : null,
+                            onAndroidHelp: Platform.isAndroid && device.paired
+                                ? () => _showAndroidHelp(device)
+                                : null,
+                          ),
+                          const SizedBox(height: 12),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
-                ),
-                _Footer(localMeshAddress: _localMeshAddress),
-              ],
-            ),
-      floatingActionButton: _loading
-          ? null
-          : FloatingActionButton(
-              onPressed: _saving ? null : _openAddDevice,
-              tooltip: '添加电脑',
-              child: const Icon(Icons.add),
-            ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+                ],
+              );
+              if (!wide || !Platform.isWindows) return content;
+              return Row(
+                children: [
+                  SizedBox(
+                    width: 225,
+                    child: ListView(
+                      padding: const EdgeInsets.all(12),
+                      children: [
+                        const ListTile(
+                          selected: true,
+                          leading: Icon(Icons.devices_outlined),
+                          title: Text('我的电脑'),
+                        ),
+                        ListTile(
+                          leading: const Icon(Icons.desktop_windows_outlined),
+                          title: const Text('这台电脑'),
+                          onTap: _openSettings,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const VerticalDivider(width: 1),
+                  Expanded(child: content),
+                ],
+              );
+            }),
     );
   }
 }
@@ -441,39 +473,11 @@ class _PresetBar extends StatelessWidget {
                   selected: isSelected,
                   selectedColor: LuluTheme.accent,
                   labelStyle: TextStyle(
-                    color:
-                        isSelected ? const Color(0xFF06231B) : LuluTheme.text,
+                    color: isSelected ? Colors.white : LuluTheme.text,
                   ),
                   onSelected: (_) => onSelected(preset),
                 );
               }).toList(),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _Footer extends StatelessWidget {
-  const _Footer({required this.localMeshAddress});
-  final String? localMeshAddress;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      decoration: const BoxDecoration(
-        border: Border(top: BorderSide(color: LuluTheme.border)),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.circle, size: 10, color: LuluTheme.accent),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              '组网正常 · Tailscale 已连接 · 本机地址 ${localMeshAddress ?? '未知（演示）'}',
-              style: const TextStyle(color: LuluTheme.muted, fontSize: 12),
             ),
           ),
         ],

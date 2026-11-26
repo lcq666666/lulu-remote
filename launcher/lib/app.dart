@@ -2,22 +2,20 @@ import 'package:flutter/material.dart';
 
 import 'screens/home_screen.dart';
 
-/// LULU Remote theme — dark green/teal, like the research-page prototype.
-/// One accent, one warning colour, no gradients, no clutter.
 class LuluTheme {
-  static const background = Color(0xFF0B1F1A);
-  static const surface = Color(0xFF12261F);
-  static const card = Color(0xFF16281F);
-  static const border = Color(0xFF24443A);
-  static const accent = Color(0xFF2DD4A7);
-  static const accentDark = Color(0xFF1FA37E);
-  static const text = Color(0xFFE8F2ED);
-  static const muted = Color(0xFF9FB3A8);
-  static const warningBg = Color(0xFF3A2E12);
-  static const warningText = Color(0xFFF2C94C);
+  static const background = Color(0xFFF5F7FA);
+  static const surface = Colors.white;
+  static const card = Colors.white;
+  static const border = Color(0xFFDCE3EB);
+  static const accent = Color(0xFF2364D2);
+  static const accentDark = Color(0xFF174BA8);
+  static const text = Color(0xFF172334);
+  static const muted = Color(0xFF526378);
+  static const warningBg = Color(0xFFFFF4E2);
+  static const warningText = Color(0xFF815315);
 
   static ThemeData get theme {
-    const colorScheme = ColorScheme.dark(
+    const colorScheme = ColorScheme.light(
       primary: accent,
       secondary: accent,
       surface: surface,
@@ -38,14 +36,14 @@ class LuluTheme {
         color: card,
         elevation: 0,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(8),
           side: const BorderSide(color: border),
         ),
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
           backgroundColor: accent,
-          foregroundColor: const Color(0xFF06231B),
+          foregroundColor: Colors.white,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
           ),

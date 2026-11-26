@@ -33,8 +33,14 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
     final appName = _appController.text.trim();
     final sunshinePort = int.tryParse(_sunshinePortController.text.trim());
     final webPort = int.tryParse(_webPortController.text.trim());
-    if (name.isEmpty || address.isEmpty || appName.isEmpty) {
-      setState(() => _error = '名字、组网地址和应用名都要填。');
+    if (address.isEmpty || appName.isEmpty) {
+      setState(() => _error = '请填写对方电脑的地址和应用名。');
+      return;
+    }
+    if (!RegExp(r'^[a-zA-Z0-9][a-zA-Z0-9.-]*$').hasMatch(address) ||
+        address.toLowerCase() == 'localhost' ||
+        address.startsWith('127.')) {
+      setState(() => _error = '请填对方电脑显示的地址，例如 192.168.1.23。');
       return;
     }
     if (sunshinePort == null ||
@@ -55,7 +61,7 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
     Navigator.of(context).pop(
       Device(
         id: existing?.id ?? 'pc-${DateTime.now().microsecondsSinceEpoch}',
-        name: name,
+        name: name.isEmpty ? address : name,
         meshAddress: address,
         network: _network,
         sunshinePort: sunshinePort,
@@ -83,69 +89,86 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text(widget.device == null ? '添加电脑' : '编辑电脑')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          TextField(
-            controller: _nameController,
-            decoration: const InputDecoration(
-              labelText: '名字',
-              hintText: '比如：远程电脑一',
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _addressController,
-            decoration: const InputDecoration(
-              labelText: '组网地址',
-              hintText: '比如：100.64.0.5（Tailscale 地址）',
-            ),
-          ),
-          const SizedBox(height: 12),
-          DropdownButtonFormField<NetworkKind>(
-            value: _network,
-            decoration: const InputDecoration(labelText: '组网'),
-            items: NetworkKind.values
-                .map(
-                  (kind) => DropdownMenuItem(
-                    value: kind,
-                    child: Text(kind.label),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 580),
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              TextField(
+                controller: _nameController,
+                decoration: const InputDecoration(
+                  labelText: '电脑名称（选填）',
+                  hintText: '比如：远程电脑一',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _addressController,
+                decoration: const InputDecoration(
+                  labelText: '对方电脑的地址',
+                  hintText: '例如 192.168.1.23',
+                  helperText: '在对方电脑打开 LULU，复制「这台电脑」里的地址。',
+                  helperMaxLines: 2,
+                ),
+              ),
+              const SizedBox(height: 12),
+              ExpansionTile(
+                title: const Text('高级设置'),
+                initiallyExpanded: widget.device != null &&
+                    (widget.device!.sunshinePort != 47989 ||
+                        widget.device!.webPort != 47990 ||
+                        widget.device!.appName != 'Desktop' ||
+                        widget.device!.network != NetworkKind.tailscale),
+                children: [
+                  DropdownButtonFormField<NetworkKind>(
+                    value: _network,
+                    decoration: const InputDecoration(labelText: '跨网连接方式'),
+                    items: NetworkKind.values
+                        .map(
+                          (kind) => DropdownMenuItem(
+                            value: kind,
+                            child: Text(kind.label),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      if (value != null) setState(() => _network = value);
+                    },
                   ),
-                )
-                .toList(),
-            onChanged: (value) {
-              if (value != null) setState(() => _network = value);
-            },
+                  const SizedBox(height: 8),
+                  const Text(
+                    '同一个 Wi-Fi 下可直接用局域网地址。',
+                    style: TextStyle(color: LuluTheme.muted, fontSize: 12),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _sunshinePortController,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: '远程连接端口'),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _webPortController,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: '管理端口'),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _appController,
+                    decoration: const InputDecoration(labelText: '串流应用名'),
+                  ),
+                ],
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 12),
+                Text(_error!, style: const TextStyle(color: Colors.redAccent)),
+              ],
+              const SizedBox(height: 16),
+              ElevatedButton(onPressed: _save, child: const Text('保存')),
+            ],
           ),
-          const SizedBox(height: 8),
-          const Text(
-            '填 Tailscale（首选）或 ZeroTier（备选）的地址。端口一般不用改。',
-            style: TextStyle(color: LuluTheme.muted, fontSize: 12),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _sunshinePortController,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(labelText: 'Sunshine 端口'),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _webPortController,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(labelText: 'Sunshine 网页端口'),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _appController,
-            decoration: const InputDecoration(labelText: '串流应用名'),
-          ),
-          if (_error != null) ...[
-            const SizedBox(height: 12),
-            Text(_error!, style: const TextStyle(color: Colors.redAccent)),
-          ],
-          const SizedBox(height: 16),
-          ElevatedButton(onPressed: _save, child: const Text('保存')),
-        ],
+        ),
       ),
     );
   }

@@ -86,7 +86,7 @@ class DeviceCard extends StatelessWidget {
             ),
             const SizedBox(height: 10),
             Text(
-              '组网地址 ${device.meshAddress} · Sunshine 端口 ${device.sunshinePort}',
+              device.meshAddress,
               style: const TextStyle(color: LuluTheme.muted),
             ),
             Text(
@@ -100,9 +100,7 @@ class DeviceCard extends StatelessWidget {
               ),
             if (Platform.isAndroid || Platform.isWindows)
               Text(
-                Platform.isAndroid
-                    ? '需先在 Moonlight 内配对一次（验证中）'
-                    : 'Windows · LULU 内配对后可点连接',
+                Platform.isAndroid ? '首次连接需要在手机串流应用内配对。' : '选择「进入桌面」连接这台电脑。',
                 style: const TextStyle(color: LuluTheme.muted),
               ),
             const SizedBox(height: 12),
@@ -111,7 +109,7 @@ class DeviceCard extends StatelessWidget {
               children: [
                 ElevatedButton(
                   onPressed: connecting ? null : onConnect,
-                  child: Text(connecting ? '连接中…' : '连接'),
+                  child: Text(connecting ? '连接中…' : '进入桌面'),
                 ),
                 if (onDisconnect != null)
                   OutlinedButton(
@@ -140,7 +138,7 @@ class DeviceCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: const Text(
-                  '这台还没配对，先做一次（约 2 分钟）：点「开始配对」，LULU 会在里面显示一个 4 位 PIN，并自动把它提交给对方电脑的 Sunshine，全程不用打开 Moonlight。',
+                  '首次连接需要配对，请准备对方电脑的管理账号。',
                   style: TextStyle(color: LuluTheme.warningText),
                 ),
               ),
