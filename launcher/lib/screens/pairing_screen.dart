@@ -28,7 +28,6 @@ class _PairingScreenState extends State<PairingScreen> {
   final _userController = TextEditingController();
   final _passwordController = TextEditingController();
 
-  PairingPhase? _phase;
   String? _message;
   String? _pin;
   String? _error;
@@ -64,7 +63,6 @@ class _PairingScreenState extends State<PairingScreen> {
     setState(() {
       _running = true;
       _error = null;
-      _phase = PairingPhase.starting;
       _message = '正在准备配对…';
     });
     // Store the credentials before pairing starts (secure storage only).
@@ -80,7 +78,6 @@ class _PairingScreenState extends State<PairingScreen> {
         onProgress: (progress) {
           if (!mounted) return;
           setState(() {
-            _phase = progress.phase;
             _message = progress.message;
             if (progress.pin != null) _pin = progress.pin;
           });

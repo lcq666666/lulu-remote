@@ -18,6 +18,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data'; // Uint8List — was missing; flutter analyze reported it undefined 10 times
 
 import 'package:xml/xml.dart';
 
