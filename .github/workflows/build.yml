@@ -8,9 +8,13 @@
 # Triggers: every push to main (artifacts only) and every v* tag
 # (artifacts + a GitHub Release with the installers attached).
 #
-# NOT run yet — no CI run has happened for this repo. The first green
-# run is the real test of the .iss files, the fetch script, and the
-# silent-install switches (see installer/README.md).
+# First run (2026-11-26, run #1) failed BEFORE any job ran: GitHub
+# rejected `if: ${{ secrets.… }}` on two steps with
+# "Unrecognized named-value: 'secrets'". So the keystore check is now
+# done inside a `run:` step (secrets ARE available there) and its
+# output drives the two build steps. The first green run is still the
+# real test of the .iss files, the fetch script, and the silent-install
+# switches (see installer/README.md).
 
 name: Build LULU Remote installers
 
@@ -92,8 +96,20 @@ jobs:
         with:
           channel: stable
           flutter-version: '3.22.x'
+      # secrets cannot be used in a step `if:` (GitHub rejects the file),
+      # so check it here in `run:` and let the two build steps read the output.
+      - name: Check keystore configured
+        id: keystore
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
       - name: Build APK (release, signed — only if keystore secrets exist)
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        if: ${{ steps.keystore.outputs.configured == 'true' }}
         working-directory: launcher
         run: |
           echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > /tmp/lulu-release.keystore
@@ -111,7 +127,7 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       - name: Build APK (debug, unsigned — no keystore configured)
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 == '' }}
+        if: ${{ steps.keystore.outputs.configured == 'false' }}
         working-directory: launcher
         run: |
           flutter pub get
