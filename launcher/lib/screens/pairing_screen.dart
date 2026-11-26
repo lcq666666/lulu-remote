@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../app.dart';
@@ -78,10 +80,27 @@ class _PairingScreenState extends State<PairingScreen> {
         onProgress: (progress) {
           if (!mounted) return;
           setState(() {
-            _message = progress.message;
+            _message = progress.phase == PairingPhase.done
+                ? 'LULU 配对完成。'
+                : progress.message;
             if (progress.pin != null) _pin = progress.pin;
           });
         },
+      );
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('LULU 配对成功'),
+          content: Text(
+              Platform.isAndroid ? '需先在 Moonlight 内配对一次（验证中）。' : '现在可以回首页点连接。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('完成'),
+            ),
+          ],
+        ),
       );
       if (!mounted) return;
       Navigator.of(context).pop(result.device);

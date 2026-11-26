@@ -1,6 +1,9 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../app.dart';
 import '../models/device.dart';
@@ -34,6 +37,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _connectingId;
   String? _localMeshAddress;
   bool _loading = true;
+  bool _saving = false;
 
   @override
   void initState() {
@@ -44,6 +48,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _load() async {
     final devices = await _deviceStore.load();
     final local = await _mesh.localMeshAddress();
+    if (!mounted) return;
     setState(() {
       _devices = devices;
       _localMeshAddress = local;
@@ -60,7 +65,8 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) setState(() => _status = next);
   }
 
-  Future<void> _connect(Device device) async {
+  Future<void> _connect(Device device, {bool androidShortcut = false}) async {
+    if (_connectingId != null || _saving) return;
     if (!device.paired) {
       await _openPairing(device);
       return;
@@ -68,10 +74,9 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _connectingId = device.id);
     try {
       if (Platform.isWindows) {
-        await _launcher.streamWindows(device, _preset);
-        _snack('已拉起 Moonlight，正在连接 ${device.name}…');
+        await _connectWindows(device);
       } else if (Platform.isAndroid) {
-        await _connectAndroid(device);
+        await _connectAndroid(device, shortcut: androidShortcut);
       } else {
         _snack('这个平台还不支持一键连接，请用 Windows 或安卓。');
       }
@@ -88,32 +93,143 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  /// Android: Game Intent with LULU's own cert first (unverified
-  /// prototype — see MainActivity.kt); fall back to ShortcutTrampoline
-  /// when the device was paired inside Moonlight itself.
-  Future<void> _connectAndroid(Device device) async {
-    final serverCertHex =
-        await _secureStore.readServerCertHex(device.id);
-    if (serverCertHex == null || device.appId == null) {
-      // No LULU cert on file — this device was paired the old way.
-      final ok = await _launcher.launchShortcut(device);
-      _snack(ok ? '已拉起 Moonlight。' : '拉起 Moonlight 失败，请检查它是否已安装。');
+  Future<void> _connectWindows(Device device) async {
+    if (await _mesh.check(device) != HostStatus.online) {
+      throw const MoonlightLaunchException('无法连接 Sunshine，请检查网络、组网地址和端口。');
+    }
+    if (!mounted) return;
+    final process = await _launcher.streamWindows(device, _preset);
+    final error = StringBuffer();
+    final stderr = process.stderr
+        .transform(const Utf8Decoder(allowMalformed: true))
+        .forEach((chunk) {
+      if (error.length < 8192) error.write(chunk);
+    });
+    unawaited(process.stdout.drain<void>());
+    final exit = process.exitCode;
+    final earlyExit = await exit.then<int?>((code) => code).timeout(
+          const Duration(seconds: 3),
+          onTimeout: () => null,
+        );
+    if (earlyExit != null) {
+      throw MoonlightLaunchException(
+          await _windowsExitMessage(earlyExit, stderr, error));
+    }
+    unawaited(exit.then((code) async {
+      if (code != 0) _snack(await _windowsExitMessage(code, stderr, error));
+    }));
+  }
+
+  Future<String> _windowsExitMessage(
+    int code,
+    Future<void> stderr,
+    StringBuffer error,
+  ) async {
+    await stderr;
+    final message = error.toString().trim();
+    return message.isEmpty ? 'Moonlight 已退出（退出码 $code）。' : message;
+  }
+
+  Future<void> _disconnectWindows(Device device) async {
+    if (_connectingId != null || _saving) return;
+    setState(() => _connectingId = device.id);
+    try {
+      await _launcher.quitWindows(device);
+      _snack('已请求断开 ${device.name}。');
+    } catch (e) {
+      _snack('断开连接失败：$e');
+    } finally {
+      if (mounted) setState(() => _connectingId = null);
+    }
+  }
+
+  Future<void> _connectAndroid(Device device, {bool shortcut = false}) async {
+    if (await _mesh.check(device) != HostStatus.online) {
+      _snack('无法连接 Sunshine。请检查手机网络、组网地址和端口。');
       return;
     }
-    final serverCertDer = _hexToBytes(serverCertHex);
-    try {
-      final ok = await _launcher.streamAndroid(
-        device,
-        useOwnCert: true,
-        serverCertDer: serverCertDer,
-      );
-      _snack(ok ? '已拉起 Moonlight。' : 'Game Intent 没有拉起，正在试备用方式…');
-      if (!ok) await _launcher.launchShortcut(device);
-    } on MoonlightLaunchException {
-      // Game Intent path failed — try the ShortcutTrampoline fallback.
-      final ok = await _launcher.launchShortcut(device);
-      _snack(ok ? '已用备用方式拉起 Moonlight。' : '两种拉起方式都失败了，见 BUILD.md 第 4 条。');
+    if (!mounted) return;
+    final serverCertHex = await _secureStore.readServerCertHex(device.id);
+    var opened = false;
+    if (!shortcut &&
+        serverCertHex != null &&
+        device.hostUuid != null &&
+        device.appId != null) {
+      try {
+        opened = await _launcher.streamAndroid(
+          device,
+          useOwnCert: true,
+          serverCertDer: _hexToBytes(serverCertHex),
+        );
+      } on MoonlightLaunchException {
+        // Try the shortcut for hosts already paired inside Moonlight.
+      }
     }
+    if (!opened && device.hostUuid != null && device.appId != null) {
+      try {
+        opened = await _launcher.launchShortcut(device);
+      } on MoonlightLaunchException {
+        // Show the same recovery instructions for either launch path.
+      }
+    }
+    if (!mounted) return;
+    if (opened) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text('已请求打开 Moonlight，请在 Moonlight 中确认是否开始串流。'),
+        duration: const Duration(seconds: 12),
+        action: SnackBarAction(
+          label: '连接失败帮助',
+          onPressed: () => _showAndroidHelp(device),
+        ),
+      ));
+    } else {
+      unawaited(_showAndroidHelp(device));
+    }
+  }
+
+  Future<void> _showAndroidHelp(Device device) async {
+    if (!mounted) return;
+    final action = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Moonlight 退出或连接失败'),
+        content: const Text('安卓端需要在 Moonlight 里先配对一次，再回 LULU 点连接。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('关闭'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'store'),
+            child: const Text('Moonlight 商店页'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'shortcut'),
+            child: const Text('已在 Moonlight 配对，重试'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (action == 'shortcut') {
+      await _connect(device, androidShortcut: true);
+    } else if (action == 'store') {
+      await _openMoonlightStore();
+    }
+  }
+
+  Future<void> _openMoonlightStore() async {
+    try {
+      final opened = await launchUrl(
+        Uri.parse(
+            'https://play.google.com/store/apps/details?id=com.limelight'),
+        mode: LaunchMode.externalApplication,
+      );
+      if (opened) return;
+    } catch (_) {
+      // Keep the manual opening instructions available.
+    }
+    _snack('无法打开商店，请从手机应用列表打开 Moonlight。');
   }
 
   static List<int> _hexToBytes(String hex) {
@@ -125,36 +241,82 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _openPairing(Device device) async {
+    if (_saving || _connectingId != null) return;
     final updated = await Navigator.of(context).push<Device>(
       MaterialPageRoute(builder: (_) => PairingScreen(device: device)),
     );
-    if (updated != null) {
-      setState(() {
-        _devices = _devices
-            .map((d) => d.id == updated.id ? updated : d)
-            .toList();
-      });
-      await _deviceStore.save(_devices);
-      await _refreshStatus();
+    if (mounted && updated != null) {
+      await _saveDeviceChange(() => _deviceStore.updateDevice(updated));
     }
   }
 
-  Future<void> _openAddDevice() async {
-    if (_devices.length >= DeviceStore.maxDevices) {
+  Future<void> _openAddDevice([Device? existing]) async {
+    if (_saving || _connectingId != null) return;
+    if (existing == null && _devices.length >= DeviceStore.maxDevices) {
       _snack('v1 只支持 ${DeviceStore.maxDevices} 台电脑。');
       return;
     }
     final device = await Navigator.of(context).push<Device>(
-      MaterialPageRoute(builder: (_) => const AddDeviceScreen()),
+      MaterialPageRoute(builder: (_) => AddDeviceScreen(device: existing)),
     );
-    if (device != null) {
-      setState(() => _devices = [..._devices, device]);
-      await _deviceStore.save(_devices);
+    if (!mounted || device == null) return;
+    await _saveDeviceChange(() async {
+      if (existing == null) {
+        await _deviceStore.save([..._devices, device]);
+      } else {
+        if (existing.meshAddress != device.meshAddress ||
+            existing.sunshinePort != device.sunshinePort ||
+            existing.webPort != device.webPort) {
+          await _secureStore.deleteDeviceSecrets(device.id);
+        }
+        await _deviceStore.updateDevice(device);
+      }
+    });
+  }
+
+  Future<void> _deleteDevice(Device device) async {
+    if (_saving || _connectingId != null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('删除 ${device.name}？'),
+        content: const Text('这会移除这台电脑及其本机保存的配对信息。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true) return;
+    await _saveDeviceChange(() async {
+      await _secureStore.deleteDeviceSecrets(device.id);
+      await _deviceStore.deleteDevice(device.id);
+    });
+  }
+
+  Future<void> _saveDeviceChange(Future<void> Function() save) async {
+    setState(() => _saving = true);
+    try {
+      await save();
+      final devices = await _deviceStore.load();
+      if (!mounted) return;
+      setState(() => _devices = devices);
       await _refreshStatus();
+    } catch (e) {
+      _snack('更新电脑列表失败：$e');
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
   }
 
   void _snack(String message) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message)),
     );
@@ -217,28 +379,41 @@ class _HomeScreenState extends State<HomeScreen> {
                         ],
                       ),
                       const SizedBox(height: 12),
+                      if (_devices.isEmpty) const Text('还没有电脑，点右下角添加。'),
                       for (final device in _devices) ...[
                         DeviceCard(
                           device: device,
                           preset: _preset,
                           status: _status[device.id],
-                          connecting: _connectingId == device.id,
+                          connecting: _connectingId == device.id || _saving,
                           onConnect: () => _connect(device),
                           onPair: () => _openPairing(device),
+                          onEdit: _saving ? null : () => _openAddDevice(device),
+                          onDelete:
+                              _saving ? null : () => _deleteDevice(device),
+                          onDisconnect: Platform.isWindows && device.paired
+                              ? () => _disconnectWindows(device)
+                              : null,
+                          onAndroidHelp: Platform.isAndroid && device.paired
+                              ? () => _showAndroidHelp(device)
+                              : null,
                         ),
                         const SizedBox(height: 12),
                       ],
-                      OutlinedButton.icon(
-                        onPressed: _openAddDevice,
-                        icon: const Icon(Icons.add),
-                        label: const Text('添加电脑（填组网地址即可）'),
-                      ),
                     ],
                   ),
                 ),
                 _Footer(localMeshAddress: _localMeshAddress),
               ],
             ),
+      floatingActionButton: _loading
+          ? null
+          : FloatingActionButton(
+              onPressed: _saving ? null : _openAddDevice,
+              tooltip: '添加电脑',
+              child: const Icon(Icons.add),
+            ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
     );
   }
 }
@@ -266,9 +441,8 @@ class _PresetBar extends StatelessWidget {
                   selected: isSelected,
                   selectedColor: LuluTheme.accent,
                   labelStyle: TextStyle(
-                    color: isSelected
-                        ? const Color(0xFF06231B)
-                        : LuluTheme.text,
+                    color:
+                        isSelected ? const Color(0xFF06231B) : LuluTheme.text,
                   ),
                   onSelected: (_) => onSelected(preset),
                 );

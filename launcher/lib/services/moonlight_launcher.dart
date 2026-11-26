@@ -69,7 +69,7 @@ class MoonlightLauncher {
     return Process.start(exe, [
       'stream',
       device.meshAddress,
-      '"${device.appName}"',
+      device.appName,
       ...preset.cliArgs,
       '--display-mode',
       'windowed',
@@ -81,13 +81,23 @@ class MoonlightLauncher {
 
   Future<void> quitWindows(Device device) async {
     final exe = await findMoonlightQt();
-    if (exe == null) return;
-    await Process.run(exe, ['quit', device.meshAddress]);
+    if (exe == null) {
+      throw const MoonlightNotInstalledException('没有找到 moonlight-qt.exe。');
+    }
+    final result = await Process.run(exe, ['quit', device.meshAddress]);
+    if (result.exitCode != 0) {
+      final error = (result.stderr as String).trim();
+      throw MoonlightLaunchException(
+        error.isEmpty ? '断开连接失败（退出码 ${result.exitCode}）。' : error,
+      );
+    }
   }
 
   Future<String> listAppsWindows(Device device) async {
     final exe = await findMoonlightQt();
-    if (exe == null) throw const MoonlightNotInstalledException('没有找到 moonlight-qt.exe。');
+    if (exe == null) {
+      throw const MoonlightNotInstalledException('没有找到 moonlight-qt.exe。');
+    }
     final result = await Process.run(exe, ['list', device.meshAddress]);
     return result.stdout as String;
   }

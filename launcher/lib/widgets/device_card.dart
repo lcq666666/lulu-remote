@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../app.dart';
@@ -17,6 +19,10 @@ class DeviceCard extends StatelessWidget {
     required this.connecting,
     required this.onConnect,
     required this.onPair,
+    this.onEdit,
+    this.onDelete,
+    this.onDisconnect,
+    this.onAndroidHelp,
   });
 
   final Device device;
@@ -25,6 +31,10 @@ class DeviceCard extends StatelessWidget {
   final bool connecting;
   final VoidCallback onConnect;
   final VoidCallback onPair;
+  final VoidCallback? onEdit;
+  final VoidCallback? onDelete;
+  final VoidCallback? onDisconnect;
+  final VoidCallback? onAndroidHelp;
 
   @override
   Widget build(BuildContext context) {
@@ -57,6 +67,21 @@ class DeviceCard extends StatelessWidget {
                   ),
                 ),
                 _PairedBadge(paired: device.paired),
+                PopupMenuButton<String>(
+                  tooltip: '电脑操作',
+                  enabled: onEdit != null && onDelete != null,
+                  onSelected: (action) {
+                    if (action == 'edit') {
+                      onEdit?.call();
+                    } else {
+                      onDelete?.call();
+                    }
+                  },
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(value: 'edit', child: Text('编辑')),
+                    PopupMenuItem(value: 'delete', child: Text('删除')),
+                  ],
+                ),
               ],
             ),
             const SizedBox(height: 10),
@@ -73,15 +98,32 @@ class DeviceCard extends StatelessWidget {
                 '状态：${status!.label}',
                 style: const TextStyle(color: LuluTheme.muted),
               ),
+            if (Platform.isAndroid || Platform.isWindows)
+              Text(
+                Platform.isAndroid
+                    ? '需先在 Moonlight 内配对一次（验证中）'
+                    : 'Windows · LULU 内配对后可点连接',
+                style: const TextStyle(color: LuluTheme.muted),
+              ),
             const SizedBox(height: 12),
-            Row(
+            Wrap(
+              spacing: 12,
               children: [
                 ElevatedButton(
                   onPressed: connecting ? null : onConnect,
                   child: Text(connecting ? '连接中…' : '连接'),
                 ),
+                if (onDisconnect != null)
+                  OutlinedButton(
+                    onPressed: connecting ? null : onDisconnect,
+                    child: const Text('断开连接'),
+                  ),
+                if (onAndroidHelp != null)
+                  TextButton(
+                    onPressed: connecting ? null : onAndroidHelp,
+                    child: const Text('Moonlight 连接帮助'),
+                  ),
                 if (!device.paired) ...[
-                  const SizedBox(width: 12),
                   TextButton(
                     onPressed: onPair,
                     child: const Text('开始配对'),
@@ -119,7 +161,8 @@ class _PairedBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
-        color: paired ? LuluTheme.accent.withOpacity(0.15) : LuluTheme.warningBg,
+        color:
+            paired ? LuluTheme.accent.withOpacity(0.15) : LuluTheme.warningBg,
         borderRadius: BorderRadius.circular(20),
       ),
       child: Text(

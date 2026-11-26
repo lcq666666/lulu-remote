@@ -42,6 +42,19 @@ class HostSetupService {
         optional: true,
         fixUrl: Uri.parse('https://www.zerotier.com/download/'),
       ));
+    } else if (Platform.isAndroid) {
+      checks.add(SetupCheck(
+        title: 'Moonlight Android',
+        ok: false,
+        detail: '用于串流，请到 Play 商店确认已安装。',
+        fixUrl: Uri.parse('market://details?id=com.limelight'),
+      ));
+      checks.add(SetupCheck(
+        title: 'Tailscale',
+        ok: false,
+        detail: '用于组网，请到 Play 商店确认已安装。',
+        fixUrl: Uri.parse('market://details?id=com.tailscale.ipn'),
+      ));
     } else {
       checks.add(const SetupCheck(
         title: 'Moonlight Android 已安装',
@@ -84,7 +97,11 @@ class HostSetupService {
 
   Future<void> openFix(SetupCheck check) async {
     final url = check.fixUrl;
-    if (url != null) await launchUrl(url, mode: LaunchMode.externalApplication);
+    if (url == null) return;
+    final opened = await launchUrl(url, mode: LaunchMode.externalApplication);
+    if (!opened && Platform.isAndroid) {
+      throw StateError('无法打开 ${check.title} 的下载页面。');
+    }
   }
 }
 

@@ -69,11 +69,39 @@ class _SetupChecklistScreenState extends State<SetupChecklistScreen> {
     }
   }
 
+  Future<void> _openAndroidStore(SetupCheck check) async {
+    setState(() => _installResult = null);
+    try {
+      await _service.openFix(check);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _installResult = '无法打开 Play 商店。请确认手机装有 Play 商店，或在浏览器访问 '
+          'play.google.com 搜索 ${check.title}。');
+    }
+  }
+
+  Future<void> _chooseAndroidComponent(List<SetupCheck> options) async {
+    setState(() => _installResult = null);
+    final selected = await showDialog<SetupCheck>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('选择要打开的 Play 商店页面'),
+        children: [
+          for (final check in options)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, check),
+              child: Text(check.title),
+            ),
+        ],
+      ),
+    );
+    if (mounted && selected != null) await _openAndroidStore(selected);
+  }
+
   @override
   Widget build(BuildContext context) {
-    final missing = (_checks ?? [])
-        .where((c) => c.ok == false && !c.optional)
-        .toList();
+    final missing =
+        (_checks ?? []).where((c) => c.ok == false && !c.optional).toList();
     return Scaffold(
       appBar: AppBar(title: const Text('设置检查清单')),
       body: _checks == null
@@ -85,7 +113,11 @@ class _SetupChecklistScreenState extends State<SetupChecklistScreen> {
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
-                      onPressed: _installing ? null : _installMissing,
+                      onPressed: _installing
+                          ? null
+                          : Platform.isAndroid
+                              ? () => _chooseAndroidComponent(missing)
+                              : _installMissing,
                       icon: _installing
                           ? const SizedBox(
                               width: 18,
@@ -103,11 +135,11 @@ class _SetupChecklistScreenState extends State<SetupChecklistScreen> {
                   const SizedBox(height: 8),
                   Text(
                     Platform.isAndroid
-                        ? '安卓不允许一个应用静默安装另一个应用：点一下会跳转到 Play 商店，'
-                            '由你点一下“安装”确认。装完回来点连接就行。'
+                        ? '选一个组件打开 Play 商店，安装后返回这里打开另一项。'
                         : '点一下就装好缺的组件，每装一个会弹一次管理员确认，'
                             '不用你再去各家官网下载。',
-                    style: const TextStyle(color: LuluTheme.muted, fontSize: 12),
+                    style:
+                        const TextStyle(color: LuluTheme.muted, fontSize: 12),
                   ),
                   const SizedBox(height: 8),
                 ],
@@ -142,7 +174,9 @@ class _SetupChecklistScreenState extends State<SetupChecklistScreen> {
                     trailing: check.fixUrl == null || check.ok == true
                         ? null
                         : TextButton(
-                            onPressed: () => _service.openFix(check),
+                            onPressed: Platform.isAndroid
+                                ? () => _openAndroidStore(check)
+                                : () => _service.openFix(check),
                             child: const Text('去下载'),
                           ),
                   ),

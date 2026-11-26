@@ -15,36 +15,31 @@ class DeviceStore {
   Future<List<Device>> load() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_key);
-    if (raw == null || raw.isEmpty) return _seed();
+    if (raw == null || raw.isEmpty) return [];
     final list = jsonDecode(raw) as List<dynamic>;
-    return list
-        .map((e) => Device.fromJson(e as Map<String, dynamic>))
-        .toList();
+    return list.map((e) => Device.fromJson(e as Map<String, dynamic>)).toList();
   }
 
   Future<void> save(List<Device> devices) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
+    final saved = await prefs.setString(
       _key,
       jsonEncode(devices.map((d) => d.toJson()).toList()),
     );
+    if (!saved) throw StateError('无法保存电脑列表。');
   }
 
-  /// First-run seed: the two placeholder hosts from the research
-  /// prototype. The user edits the mesh addresses to their real ones.
-  /// Nothing here is a real credential.
-  List<Device> _seed() => [
-        Device(
-          id: 'pc-1',
-          name: '远程电脑一',
-          meshAddress: '100.64.0.5',
-          network: NetworkKind.tailscale,
-        ),
-        Device(
-          id: 'pc-2',
-          name: '远程电脑二',
-          meshAddress: '100.64.0.9',
-          network: NetworkKind.tailscale,
-        ),
-      ];
+  Future<void> deleteDevice(String id) async {
+    final devices = await load();
+    devices.removeWhere((device) => device.id == id);
+    await save(devices);
+  }
+
+  Future<void> updateDevice(Device device) async {
+    final devices = await load();
+    final index = devices.indexWhere((saved) => saved.id == device.id);
+    if (index == -1) throw StateError('这台电脑已不存在。');
+    devices[index] = device;
+    await save(devices);
+  }
 }
