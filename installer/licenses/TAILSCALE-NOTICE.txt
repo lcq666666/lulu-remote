@@ -1,0 +1,31 @@
+Tailscale — notice (downloaded during install, not bundled)
+
+Tailscale is NOT bundled inside this installer. During installation,
+a script downloads the official Tailscale Windows installer from
+Tailscale's own servers and verifies its SHA-256 checksum before
+running it. If the download or the checksum fails, the install stops
+with an error instead of silently skipping Tailscale.
+
+  Component: Tailscale Windows client
+  Version installed: 1.104.7
+  Download URL: https://pkgs.tailscale.com/stable/tailscale-setup-1.104.7-amd64.msi
+  Expected SHA-256: 676b5b32fdd1aeaee90d8e8f38e222635b216fbdfbf877bf01cb1d7cda330ec5
+  License: BSD-3-Clause (open-source client/daemon code)
+  Source code: https://github.com/tailscale/tailscale
+  Download page: https://tailscale.com/download/windows
+
+Why it is downloaded instead of bundled: the Tailscale open-source
+repository (BSD-3-Clause) covers the daemon and command-line client,
+but the official Windows GUI client is a separate product, and
+redistributing its installer inside another package is not clearly
+permitted. Downloading it from Tailscale's own servers avoids that
+question entirely. The Tailscale hosted control plane (account,
+login, coordination) is a separate service governed by Tailscale's
+own terms; the free Personal plan is what LULU Remote uses.
+
+The SHA-256 above comes from the Windows Package Manager manifest
+(a secondary source). The installer re-computes the hash of the
+downloaded file and aborts on mismatch; the build-time fetch script
+does the same check. If Tailscale publishes a different file for
+this version, both checks will fail loudly rather than install a
+file nobody verified.

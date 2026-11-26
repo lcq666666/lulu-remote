@@ -1,0 +1,28 @@
+Sunshine — source code offer (GPL-3.0)
+
+This installer ships an unmodified copy of Sunshine, which is
+free software licensed under the GNU General Public License version 3
+(GPL-3.0).
+
+  Component: Sunshine (GameStream host)
+  Version shipped: v2026.914.233613
+  License: GPL-3.0
+  Copyright: LizardByte contributors
+  Source code: https://github.com/LizardByte/Sunshine
+  Release page: https://github.com/LizardByte/Sunshine/releases/tag/v2026.914.233613
+  Full license text: shipped in this installer's licenses\ folder
+  (file: Sunshine-LICENSE), downloaded from the official repository
+  at build time.
+
+The complete corresponding source code for the exact version shipped
+is available at the release page above. No modifications were made
+to the Sunshine binary by LULU Remote.
+
+Note: the Sunshine repository has been renamed to SunshineStream/Sunshine;
+both names point at the same release. If you received this installer
+without the license text, the GPL-3.0 license text is also available
+at https://www.gnu.org/licenses/gpl-3.0.txt
+
+Note: Sunshine's Windows Virtual HID Driver for gamepads is a separate
+paid-licensed component from LizardByte and is NOT included here.
+Keyboard/mouse streaming uses the free path.

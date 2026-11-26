@@ -27,6 +27,27 @@
 
 - 2026-11-26：首次提交完成，commit 7c67d86，40 个文件，3672 行，本地 main 分支，无远端，未推送。仓库仍私有，本地保存。
 
+## 一键安装要求（2026-11-26 17:16，用户原话要点）
+
+用户觉得之前的要求太高，要分别下载好几个程序。改为：直接打包成正常 APP，所用的 exe 相关依赖都放进安装包里，用户一键安装。
+
+- 客户端（控制端 Windows）：一个安装包，带齐 LULU 启动器 + Moonlight Qt + Tailscale，装完即用，不用用户再去各家官网下载。
+- 被控端（两台远端电脑）：一个安装包，带齐 Sunshine + Tailscale，装完按提示建好管理员账号即可。
+- 安卓：一个 APK，首次打开时用一步引导装好 Moonlight 和 Tailscale（安卓不允许静默装别的应用，最多做到一键跳转安装，用户点一下确认）。
+- 关键纠正：Flutter、Visual Studio、Android SDK 只是“做” LULU 需要的工具，不是“用” LULU 需要的。用户用的时候不该装这些。打包改用 GitHub Actions 在云端自动编译 Windows 安装包和 APK，用户只下载成品。
+
+## 一键安装实施（2026-11-26）
+
+用户要求改一键安装后做的事，文件都在 `installer/` 和 `.github/workflows/`：
+
+- 客户端安装包 `installer/client/LULU-Remote-Setup.iss`：LULU 启动器 + Moonlight Qt v6.2.0（随包，GPL-3.0，附 LICENSE 和源码说明）+ Tailscale 1.104.7（安装时从官网下载并校验 SHA-256）。
+- 被控端安装包 `installer/host/LULU-Host-Setup.iss`：Sunshine v2026.914.233613（随包，GPL-3.0）+ Tailscale（同上），装完放行防火墙、启动 Sunshine、打开 `https://localhost:47990` 建管理员账号。
+- Tailscale 不随包分发的原因写在 `installer/VERSIONS.md`：开源客户端是 BSD-3-Clause，但官方 Windows 图形客户端是独立产品，直接打包再分发没有明确许可，所以走安装时官网下载。
+- CI `.github/workflows/build.yml`：跑测试、编 Windows 版、编 APK、取包并校验、编译两个安装包；打 `v*` 标签时自动发 Release。用户用 LULU 不需要 Flutter / Visual Studio / Android SDK / Inno Setup，这些只在 CI 里用。
+- Flutter 里加了 `lib/services/component_installer.dart` 和设置检查清单顶部的“一键安装缺失组件”按钮：Windows 上重跑安装包里自带的组件安装器；安卓上只能一键跳转 Play 商店，界面文字如实说了这一点。
+- 钉住的版本见 `installer/VERSIONS.md`；第三方清单见 `release/THIRD-PARTY.md`。
+- 没验证过的：`.iss` 没编译过，CI 工作流没跑过，静默安装参数和取包脚本的 asset 名字规律是按常见情况写的，第一次 CI 才是真正的测试。安装包目前无代码签名，首次打开会有 SmartScreen 警告。
+
 ## 骨架实现（2026-11-26，v1 scaffold）
 
 - `launcher/` 已搭好：Flutter 一套代码出 Windows exe + Android APK，深绿主题、2 台设备列表、画质预设、在线状态、Tailscale 状态栏。

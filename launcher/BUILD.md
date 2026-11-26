@@ -7,21 +7,63 @@
   `schlarpc/castaway` `docs/gamestream-protocol-notes.md` (§3, Appendix A),
   Sunshine API docs (`POST /api/pin`, `GET /api/pin`), and the
   moonlight-qt CLI source (`pair` / `list` / `stream` / `quit`).
+- ✅ Pinned component versions checked on the web 2026-11-26:
+  Moonlight Qt v6.2.0 (2026-10-04), Sunshine v2026.914.233613
+  (2026-09-14), Tailscale 1.104.7 (2026-11-12, MSI SHA-256 from the
+  winget manifest — a secondary source; CI and the installer both
+  re-verify it). Tailscale's redistribution position checked the same
+  day: open-source client/daemon are BSD-3-Clause, but the official
+  Windows GUI client is a separate product, so Tailscale is
+  downloaded at install time, never bundled (see `../installer/VERSIONS.md`).
 - ❌ **Flutter / Dart are NOT installed here** (`flutter: command not found`).
   `flutter pub get`, `flutter analyze`, `flutter test`,
   `flutter build windows` and `flutter build apk` have **not** been run.
   Nothing in this scaffold is compile-verified yet.
+- ❌ **No Inno Setup, no Windows runner here either.** The `.iss`
+  files and `.github/workflows/build.yml` have **not** been compiled
+  or run. The first CI run is their real test.
 
-## What you need (build machine)
+## Who needs what: use vs. build
+
+This is the fix for the "too many separate downloads" complaint
+(2026-11-26, see `../docs/decisions.md`):
+
+| Who | Needs |
+|---|---|
+| **User** (uses LULU) | One file per machine, from GitHub Releases: `LULU-Remote-Setup-*.exe` (control PC), `LULU-Host-Setup-*.exe` (each remote PC), `*.apk` (phone). Double-click, Next-Next-Finish. **No** Flutter, Visual Studio, Android SDK, or Inno Setup. |
+| **CI** (builds LULU) | Flutter 3.22+, Inno Setup 6.x, JDK 17 — all installed by `.github/workflows/build.yml` on the runners. |
+| **Developer** (changes LULU code locally) | Same as CI, plus a Windows PC for `flutter build windows` and an Android SDK for `flutter build apk`. Local builds are for development only — release installers always come from CI. |
+
+## Release build (GitHub Actions — the only release build)
+
+`.github/workflows/build.yml`, on push to `main` and on `v*` tags:
+
+1. `flutter test` → `flutter analyze` (Linux job, fast fail).
+2. Windows job: `flutter build windows --release` →
+   `installer\scripts\fetch-components.ps1` (downloads Moonlight +
+   Sunshine, writes `installer/vendor/MANIFEST.md`, fetches both
+   LICENSE files, verifies the Tailscale MSI hash and deletes it) →
+   `iscc` compiles both `.iss` files → installers uploaded as artifacts.
+3. Android job: `flutter build apk --release` when the keystore
+   secrets exist (`ANDROID_KEYSTORE_BASE64` etc.), otherwise
+   `flutter build apk --debug` and the file name says so.
+4. On `v*` tags only: the two installers + APK are attached to a
+   GitHub Release automatically.
+
+## What you need (build machine — local dev only)
 
 ### Windows exe
 
 - Windows 10/11 64-bit, Visual Studio 2022 with the
   **Desktop development with C++** workload (required by Flutter Windows).
 - Flutter SDK 3.22+ (stable channel), Git.
-- Stock engines, installed separately (not bundled):
+- For a local dev run only, stock engines installed separately:
   - Moonlight Qt — https://github.com/moonlight-stream/moonlight-qt
   - Tailscale Windows client (first) or ZeroTier (fallback).
+  The release installers bundle/download these instead — see
+  `../installer/` and the "Release build" section above. The
+  first-run wizard in the app (`lib/services/component_installer.dart`)
+  re-runs the bundled installers when a component is missing.
 - Sunshine is installed on the **remote** PCs, not on the launcher PC,
   except when the launcher PC is itself a host.
 
@@ -134,11 +176,39 @@ Do not present any of these as working until the named test passes:
    daemon state. A host can be “online” on the mesh and still refuse
    pairing (Sunshine not running, firewall). The setup checklist is
    the place that catches that, not the status dot.
+7. **Inno Setup scripts (`.iss`).** Never compiled — no Inno Setup on
+   this Linux VM. First CI run is the test. Most likely failure:
+   the `/VERYSILENT` switches assume the Moonlight / Sunshine vendor
+   installers are Inno Setup based; if `iscc` fails or a vendor
+   installer pops a window, check the vendor installers' real silent
+   switches first.
+8. **CI workflow (`.github/workflows/build.yml`).** Never run. Also
+   untested: the `choco install innosetup` step, the APK release-vs-
+   debug branch (depends on keystore secrets being set or not), and
+   the tag-release upload step.
+9. **Component fetch script.** `fetch-components.ps1` picks the
+   Sunshine Windows installer by asset-name pattern
+   (`*Windows*Installer*.exe`) through the GitHub releases API and
+   was never run against the live API. If it cannot find the asset,
+   read the error (it lists the real asset names) and fix the pattern.
+   The Moonlight asset name (`MoonlightSetup-6.2.0.exe`) and the
+   Tailscale MSI SHA-256 come from secondary sources (release listings
+   / winget manifest); both are re-verified by hash at build/install
+   time and fail loudly on mismatch.
+10. **First-run one-click install in the app.** `ComponentInstaller`
+    (re-running the bundled installers, UAC elevation via PowerShell)
+    and the Play Store jumps on Android were never run — no Flutter,
+    no Windows, no phone here. On Android, the honest limit is stated
+    in the code and the UI: no silent install of another app is
+    possible, one tap to the system install prompt is the maximum.
 
 ## Release checklist (before any distribution)
 
 - Pin exact Sunshine / Moonlight versions + SHA-256 in
-  `../release/THIRD-PARTY.md` and ship their LICENSE texts.
+  `../installer/VERSIONS.md` (single source of truth) and
+  `../release/THIRD-PARTY.md`; the build-time `vendor/MANIFEST.md`
+  carries the hashes actually downloaded. Ship their LICENSE texts
+  (CI fetches them into the installers' `licenses\` folders).
 - `lib/pairing/` ships under GPL-3.0 (see its README). The rest of the
   launcher is MIT. Do not merge the two licences into one file.
 - Windows exe is unsigned in v1 — SmartScreen will warn. A code-signing

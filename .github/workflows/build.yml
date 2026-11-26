@@ -1,0 +1,151 @@
+# Build LULU Remote installers — GitHub Actions (the ONLY place a
+# release build happens).
+#
+# The point of this workflow: NOBODY needs Flutter, Visual Studio,
+# Android SDK, or Inno Setup to USE LULU. Those tools live only here,
+# in CI. Users download finished installers from Releases / Artifacts.
+#
+# Triggers: every push to main (artifacts only) and every v* tag
+# (artifacts + a GitHub Release with the installers attached).
+#
+# NOT run yet — no CI run has happened for this repo. The first green
+# run is the real test of the .iss files, the fetch script, and the
+# silent-install switches (see installer/README.md).
+
+name: Build LULU Remote installers
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write # needed by the release job to attach assets
+
+jobs:
+  # --- 1. Tests (Linux, fast) -------------------------------------------
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.22.x'
+      - name: Dependencies
+        working-directory: launcher
+        run: flutter pub get
+      - name: Static analysis
+        working-directory: launcher
+        run: flutter analyze
+      - name: Pairing crypto tests (Sunshine golden vectors)
+        working-directory: launcher
+        run: flutter test
+
+  # --- 2. Windows: launcher exe + two Inno Setup installers --------------
+  build-windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.22.x'
+      - name: Build launcher (Windows)
+        working-directory: launcher
+        run: |
+          flutter pub get
+          flutter build windows --release
+      - name: Fetch Moonlight + Sunshine (verify hashes, fetch LICENSEs)
+        run: powershell -ExecutionPolicy Bypass -File installer\scripts\fetch-components.ps1
+      - name: Install Inno Setup
+        run: choco install innosetup -y
+      - name: Build client installer (LULU + Moonlight + Tailscale)
+        run: iscc installer\client\LULU-Remote-Setup.iss
+      - name: Build host installer (Sunshine + Tailscale)
+        run: iscc installer\host\LULU-Host-Setup.iss
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installers
+          path: |
+            installer/dist/LULU-Remote-Setup-*.exe
+            installer/dist/LULU-Host-Setup-*.exe
+            installer/vendor/MANIFEST.md
+          if-no-files-found: error
+
+  # --- 3. Android: APK ----------------------------------------------------
+  build-android:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.22.x'
+      - name: Build APK (release, signed — only if keystore secrets exist)
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        working-directory: launcher
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > /tmp/lulu-release.keystore
+          cat > android/key.properties <<EOF
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyPassword=$ANDROID_KEY_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          storeFile=/tmp/lulu-release.keystore
+          EOF
+          flutter pub get
+          flutter build apk --release
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      - name: Build APK (debug, unsigned — no keystore configured)
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 == '' }}
+        working-directory: launcher
+        run: |
+          flutter pub get
+          flutter build apk --debug
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: launcher/build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
+
+  # --- 4. Release (tags only) ---------------------------------------------
+  release:
+    needs: [build-windows, build-android]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/windows-installers/*.exe
+            dist/android-apk/*.apk
+            dist/windows-installers/MANIFEST.md
+          body: |
+            LULU Remote — one-click installers. Download, double-click,
+            Next-Next-Finish. No Flutter / Visual Studio / Android SDK
+            needed to use it.
+            - LULU-Remote-Setup-*.exe — control-side PC (LULU + Moonlight Qt + Tailscale)
+            - LULU-Host-Setup-*.exe — run once on EACH remote PC (Sunshine + Tailscale)
+            - *.apk — Android phone (LULU only; Moonlight + Tailscale install from Play Store on first run)
+            Component versions, SHA-256 and licences: see MANIFEST.md in this release.
+          draft: false
+          prerelease: false

@@ -1,0 +1,9 @@
+# Downloaded at build time by installer/scripts/fetch-components.ps1.
+# Never commit vendor binaries or the downloaded LICENSE copies —
+# they are re-fetched on every CI build so versions and hashes stay fresh.
+vendor/
+# Local build outputs.
+dist/
+# Any stray installer binaries dropped here by hand.
+*.exe
+*.msi

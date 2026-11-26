@@ -1,0 +1,23 @@
+Moonlight Qt — source code offer (GPL-3.0)
+
+This installer ships an unmodified copy of Moonlight Qt, which is
+free software licensed under the GNU General Public License version 3
+(GPL-3.0).
+
+  Component: Moonlight Qt (Moonlight PC client)
+  Version shipped: v6.2.0
+  License: GPL-3.0
+  Copyright: Moonlight Stream contributors
+  Source code: https://github.com/moonlight-stream/moonlight-qt
+  Release page: https://github.com/moonlight-stream/moonlight-qt/releases/tag/v6.2.0
+  Full license text: shipped in this installer's licenses\ folder
+  (file: Moonlight-LICENSE), downloaded from the official repository
+  at build time.
+
+The complete corresponding source code for the exact version shipped
+is available at the release page above. No modifications were made
+to the Moonlight Qt binary by LULU Remote.
+
+If you received this installer without the license text, or the
+release page above is unavailable, the GPL-3.0 license text is also
+available at https://www.gnu.org/licenses/gpl-3.0.txt
