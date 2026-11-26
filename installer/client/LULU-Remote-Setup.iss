@@ -16,7 +16,7 @@
 ; after install) so LULU's first-run wizard can re-run them later if
 ; a component failed or was removed.
 ;
-#define AppVersion "0.1.0"
+#define AppVersion "0.1.1"
 #define MoonlightSetup "MoonlightSetup-6.2.0.exe"
 
 [Setup]
@@ -53,6 +53,7 @@ Source: "..\..\launcher\build\windows\x64\runner\Release\*"; DestDir: "{app}"; F
 ; Moonlight Qt installer, bundled (downloaded by fetch-components.ps1).
 ; Kept under {app}\vendor\ so the first-run wizard can re-run it.
 Source: "..\vendor\MoonlightSetup-6.2.0.exe"; DestDir: "{app}\vendor"; Flags: ignoreversion
+Source: "..\vendor\moonlight\*"; DestDir: "{app}\vendor\moonlight"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\vendor\Sunshine-Windows-AMD64-installer.msi"; DestDir: "{app}\vendor"; Flags: ignoreversion
 Source: "..\scripts\prepare-host.ps1"; DestDir: "{app}\vendor"; Flags: ignoreversion
 ; Tailscale download script (runs at install time, downloads from Tailscale).

@@ -32,6 +32,18 @@ class MoonlightLauncher {
 
   Future<String?> findMoonlightQt() async {
     if (!Platform.isWindows) return null;
+    final bundled = Directory(
+      '${File(Platform.resolvedExecutable).parent.path}\\vendor\\moonlight',
+    );
+    if (await bundled.exists()) {
+      await for (final entry
+          in bundled.list(recursive: true, followLinks: false)) {
+        if (entry is File &&
+            entry.uri.pathSegments.last.toLowerCase() == 'moonlight.exe') {
+          return entry.path;
+        }
+      }
+    }
     for (final raw in windowsSearchPaths) {
       final expanded = raw.replaceAll(
         '%LOCALAPPDATA%',
@@ -66,17 +78,20 @@ class MoonlightLauncher {
     if (!device.paired) {
       throw const NotPairedException('这台电脑还没配对，请先在 LULU 里配对。');
     }
-    return Process.start(exe, [
-      'stream',
-      device.meshAddress,
-      device.appName,
-      ...preset.cliArgs,
-      '--display-mode',
-      'windowed',
-      // Desktop use: absolute mouse positioning, keep the host awake.
-      '--absolute-mouse',
-      '--keep-awake',
-    ]);
+    return Process.start(
+        exe,
+        [
+          'stream',
+          device.meshAddress,
+          device.appName,
+          ...preset.cliArgs,
+          '--display-mode',
+          'windowed',
+          // Desktop use: absolute mouse positioning, keep the host awake.
+          '--absolute-mouse',
+          '--keep-awake',
+        ],
+        workingDirectory: File(exe).parent.path);
   }
 
   Future<void> quitWindows(Device device) async {

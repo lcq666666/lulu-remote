@@ -360,7 +360,7 @@ class _HomeScreenState extends State<HomeScreen> {
               final wide = constraints.maxWidth >= 760;
               final content = Column(
                 children: [
-                  if (_devices.isNotEmpty)
+                  if (Platform.isWindows)
                     _PresetBar(
                       selected: _preset,
                       onSelected: (p) => setState(() => _preset = p),
@@ -475,10 +475,21 @@ class _PresetBar extends StatelessWidget {
                   labelStyle: TextStyle(
                     color: isSelected ? Colors.white : LuluTheme.text,
                   ),
-                  onSelected: (_) => onSelected(preset),
+                  onSelected: (_) => onSelected(preset.withFps(selected.fps)),
                 );
               }).toList(),
             ),
+          ),
+          const SizedBox(width: 8),
+          DropdownButton<int>(
+            value: selected.fps,
+            items: [
+              for (final fps in [30, 60, 75, 90, 120, 144])
+                DropdownMenuItem(value: fps, child: Text('$fps FPS')),
+            ],
+            onChanged: (fps) {
+              if (fps != null) onSelected(selected.withFps(fps));
+            },
           ),
         ],
       ),

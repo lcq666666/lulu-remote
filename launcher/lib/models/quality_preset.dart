@@ -20,6 +20,15 @@ class QualityPreset {
 
   String get resolution => '${width}x$height';
 
+  QualityPreset withFps(int fps) => QualityPreset(
+        id: id,
+        label: label,
+        width: width,
+        height: height,
+        fps: fps,
+        bitrateKbps: bitrateKbps,
+      );
+
   /// e.g. `办公 1080p · 60fps · 15 Mbps`
   String get summary => '$label · ${fps}fps · ${bitrateKbps ~/ 1000} Mbps';
 

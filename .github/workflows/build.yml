@@ -79,12 +79,15 @@ jobs:
           Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/jrsoftware/issrc/is-6_7_1/Files/Languages/Unofficial/ChineseSimplified.isl' -OutFile $language
       - name: Build LULU Windows installer
         run: iscc installer\client\LULU-Remote-Setup.iss
-      - name: Upload installers
+      - name: Build portable Windows ZIP
+        run: ./installer/scripts/build-portable.ps1
+      - name: Upload Windows packages
         uses: actions/upload-artifact@v4
         with:
           name: windows-installers
           path: |
             installer/dist/LULU-Remote-Setup-*.exe
+            installer/dist/LULU-Remote-Portable-*.zip
             installer/vendor/MANIFEST.md
           if-no-files-found: error
 
@@ -161,16 +164,20 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/windows-installers/*.exe
+            dist/windows-installers/dist/*.exe
+            dist/windows-installers/dist/*.zip
             dist/android-apk/*.apk
-            dist/windows-installers/MANIFEST.md
+            dist/windows-installers/vendor/MANIFEST.md
           body: |
             ### Windows
 
             下载 `LULU-Remote-Setup-*.exe`。每台电脑用同一个安装包。
+            也可以下载 `LULU-Remote-Portable-*-x64.zip`，解压整个文件夹，双击 `lulu_remote.exe`。
+            两种版本均内置连接组件。开启本机被控时，Windows 可能要求管理员确认。
             要让这台电脑接受远程连接，打开「这台电脑」，点「允许远程控制」，按提示设置管理账号。
             要连接别的电脑，在「我的电脑」添加对方电脑的地址。同一 Wi-Fi 下可用局域网地址。
             「这台电脑」里也可以开启登录 Windows 后自动启动。
+            「我的电脑」可分别选择分辨率和连接帧率，支持 30、60、75、90、120、144 FPS。
 
             ### Android
 

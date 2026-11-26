@@ -84,6 +84,16 @@ $manifest += "- Release asset: $($moonlightAsset.name)"
 $manifest += "- Download URL: $($moonlightAsset.browser_download_url)"
 $manifest += "- SHA-256: $moonlightSha"
 $manifest += '- License: GPL-3.0 — https://github.com/moonlight-stream/moonlight-qt'
+$portableZip = Join-Path $VendorDir "MoonlightPortable-x64-$MoonlightVersion.zip"
+$portable = Get-ReleaseAsset -Repo 'moonlight-stream/moonlight-qt' `
+    -Tag "v$MoonlightVersion" -Pattern "MoonlightPortable-x64-$MoonlightVersion.zip" `
+    -OutFile $portableZip
+$portableDir = Join-Path $VendorDir 'moonlight'
+Expand-Archive -LiteralPath $portableZip -DestinationPath $portableDir -Force
+$portableExe = @(Get-ChildItem -LiteralPath $portableDir -Filter Moonlight.exe -File -Recurse)
+if ($portableExe.Count -ne 1) { throw 'Unexpected Moonlight portable archive layout.' }
+$manifest += "- Portable release asset: $($portable.browser_download_url)"
+$manifest += "- Portable SHA-256: $(Get-Sha256 $portableZip)"
 $manifest += ''
 
 # --- Sunshine (bundled, GPL-3.0) ---
