@@ -66,7 +66,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           flutter build windows --release
       - name: Fetch Moonlight + Sunshine (verify hashes, fetch LICENSEs)
-        run: powershell -ExecutionPolicy Bypass -File installer\scripts\fetch-components.ps1
+        shell: pwsh
+        run: ./installer/scripts/fetch-components.ps1
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Install Inno Setup
