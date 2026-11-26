@@ -18,10 +18,14 @@
 - Windows：官方 moonlight-qt 的 `pair` 命令行没有可靠的无头取 PIN 方式（`--headless` 是个别 fork 才有的参数，官方版不支持）。可行路是 LULU 自己实现 4 阶段 `/pair` 握手，生成客户端证书和 4 位 PIN，在 LULU 里显示 PIN，再把 PIN 提交给 Sunshine（Sunshine 有 `/api/pin`，需一次输入 Sunshine 管理员密码），配对成功后用 `moonlight-qt stream` 拉起画面。配对模块借鉴 moonlight-common-c / moonlight-chrome 的 pairing 逻辑，该模块按 GPL-3.0 处理，与 LULU 壳子其余代码分开。
 - Android：同理，LULU 自己配对后，它的证书和 Moonlight 的证书不是同一张，所以不能再靠 ShortcutTrampoline 借用 Moonlight 的配对。v1 需先验证直接用 Game Intent 带 LULU 自己的证书拉起 Moonlight 是否可行；不行的话，就得 fork Moonlight Android（整个 fork GPL-3.0），工作量大得多。这是 Android 端最大的不确定点，先做原型验证再定。
 
-## 待用户确认
+## 已确认（2026-11-26 17:08，用户原话“可以，两个都接受”）
 
-- 接受配对模块按 GPL-3.0 单独处理吗？
-- 接受在 LULU 里一次输入 Sunshine 管理员密码、由 LULU 自动向 Sunshine 提交 PIN 吗？密码只存系统安全存储，不存明文。
+- 配对模块按 GPL-3.0 单独处理，接受。
+- 在 LULU 里一次输入 Sunshine 管理员密码、由 LULU 自动向 Sunshine 提交 PIN，接受。密码只存系统安全存储，不存明文。
+
+## 首次提交
+
+- 2026-11-26：首次提交完成，commit 7c67d86，40 个文件，3672 行，本地 main 分支，无远端，未推送。仓库仍私有，本地保存。
 
 ## 骨架实现（2026-11-26，v1 scaffold）
 
