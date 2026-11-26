@@ -1,0 +1,44 @@
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# Android
+android/.gradle/
+android/local.properties
+android/app/debug/
+android/app/profile/
+android/app/release/
+**/generated/
+*.keystore
+*.jks
+local.properties
+
+# Windows
+windows/flutter/ephemeral/
+windows/*.sln
+windows/*.vcxproj.user
+
+# macOS / iOS (not a v1 target, kept out of the tree)
+macos/
+ios/
+
+# Secrets — NEVER commit real keys, certs or passwords.
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.json
+**/keystore.properties
+
+# Editor
+.vscode/
+.DS_Store

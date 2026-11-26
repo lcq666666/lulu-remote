@@ -1,0 +1,34 @@
+name: lulu_remote
+description: "LULU Remote — a thin Flutter launcher shell for Sunshine + Moonlight. The launcher only stores devices and launches the stock engines; it does not implement video, NAT traversal or encryption itself."
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+  flutter: ">=3.22.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # Device list (non-secret fields only). Secrets live in flutter_secure_storage.
+  shared_preferences: ^2.3.2
+  flutter_secure_storage: ^9.2.4
+  # HTTP for Sunshine web UI (/api/pin) and NVHTTP XML responses.
+  http: ^1.2.2
+  # XML parsing for NVHTTP /serverinfo, /pair and /applist responses.
+  xml: ^6.5.0
+  # SHA-256 / general hashing (AES + RSA live in pointycastle).
+  crypto: ^3.0.6
+  # Pure-Dart crypto used ONLY by lib/pairing/ (GPL-3.0 module):
+  # AES-128-ECB, SHA-256, RSA-2048 sign/verify, ASN.1 DER.
+  pointycastle: ^4.0.0
+  # Open Sunshine web UI / download pages as a fallback.
+  url_launcher: ^6.3.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
