@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // LULU Remote — GameStream pairing crypto.
-// Written from the specification in lib/pairing/README.md
+// Written from the specification in pairing_worker/README.md
 // (castaway gamestream-protocol-notes.md §3 / Appendix A, derived from
 // moonlight-common-c e41355e and Sunshine 965c91a). Original Dart code;
 // no code copied from LL-Remote or from moonlight-common-c.

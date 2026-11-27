@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // LULU Remote — in-app GameStream pairing.
-// Protocol: lib/pairing/README.md (castaway gamestream-protocol-notes.md
+// Protocol: pairing_worker/README.md (castaway gamestream-protocol-notes.md
 // §3 / Appendix A; moonlight-common-c e41355e; Sunshine 965c91a).
 // This file orchestrates the handshake; the crypto lives in
 // gamestream_crypto.dart and the identity in client_identity.dart.
@@ -22,8 +22,8 @@ import 'dart:typed_data'; // Uint8List — was missing; flutter analyze reported
 
 import 'package:xml/xml.dart';
 
-import '../models/device.dart';
-import '../services/secure_store.dart';
+import 'device.dart';
+import 'pairing_memory.dart';
 import 'client_identity.dart';
 import 'gamestream_crypto.dart';
 import 'pairing_errors.dart';
@@ -63,12 +63,12 @@ class PairingResult {
 
 class PairingService {
   PairingService({
-    required SecureStore secureStore,
+    required PairingMemory secureStore,
     SunshinePinApi? pinApi,
   })  : _secureStore = secureStore,
         _pinApi = pinApi ?? SunshinePinApi();
 
-  final SecureStore _secureStore;
+  final PairingMemory _secureStore;
   final SunshinePinApi _pinApi;
 
   /// Pair [device] and return the updated device + pinned server cert.

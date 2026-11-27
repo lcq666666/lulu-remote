@@ -20,9 +20,9 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:flutter_test/flutter_test.dart';
-import 'package:lulu_remote/pairing/client_identity.dart';
-import 'package:lulu_remote/pairing/gamestream_crypto.dart';
+import 'package:test/test.dart';
+import 'package:lulu_pairing_worker/src/client_identity.dart';
+import 'package:lulu_pairing_worker/src/gamestream_crypto.dart';
 import 'package:pointycastle/export.dart';
 
 void main() {

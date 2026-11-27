@@ -24,13 +24,12 @@ lib/
   models/              Device, QualityPreset (MIT, launcher code)
   services/            device store, secure store, Moonlight launcher,
                        mesh status, host-setup checklist (MIT)
-  pairing/             GameStream 4-phase /pair handshake (GPL-3.0,
-                       separate module — see lib/pairing/README.md)
+  services/pairing_worker_client.dart  local pairing worker IPC
   screens/             home, pairing, add-device, setup checklist
   widgets/             device card, PIN display
 android/               MainActivity (MethodChannel for Moonlight Intents)
 windows/               minimal runner note — see BUILD.md
-test/                   pairing crypto unit tests (golden vectors)
+test/                   launcher and pairing IPC tests
 ```
 
 ## What this scaffold is — and is not
@@ -46,9 +45,4 @@ test/                   pairing crypto unit tests (golden vectors)
 
 ## Licence split
 
-- `lib/` except `lib/pairing/`: MIT (launcher UI + store + launch code).
-- `lib/pairing/`: GPL-3.0. It re-implements the GameStream pairing
-  handshake from moonlight-common-c / moonlight-chrome logic (see its
-  README). Keep it in its own directory; do not link GPL code into the
-  launcher beyond this module, and do not copy LL-Remote code — LL-Remote
-  has no LICENSE file and is `private: true`, so it is reference only.
+The launcher is MIT. GameStream pairing runs in the separate GPL-3.0-only component documented in `../pairing_worker/README.md`. On Windows, the installer and portable ZIP include the component. On Android, install the companion APK from the same build.

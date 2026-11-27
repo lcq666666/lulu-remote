@@ -5,13 +5,13 @@
 //   POST /api/pin  — {"pairing_id": "<id>", "pin": "<pin>", "name": "<client name>"}
 // Auth: HTTP Basic with the Sunshine admin username/password.
 // The admin credentials are entered once in LULU and stored only in the
-// OS secure store (SecureStore); they are never logged or written to a file.
+// launcher OS secure store. The worker never logs or persists them.
 
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import '../models/device.dart';
+import 'device.dart';
 
 class SunshinePinApi {
   SunshinePinApi({HttpClient Function()? clientFactory})
@@ -29,7 +29,7 @@ class SunshinePinApi {
 
   /// Submit [pin] for the pending pairing session on [device].
   ///
-  /// Order matters (see lib/pairing/README.md): the phase-1 `/pair`
+  /// Order matters (see pairing_worker/README.md): the phase-1 `/pair`
   /// request must already be in flight — Sunshine parks it until this
   /// call arrives. This method polls GET /api/pin for up to 30 seconds
   /// waiting for a pending pairing_id, then POSTs.

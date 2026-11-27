@@ -31,7 +31,7 @@
   不改代码。改了代码才需要另外公开改动源码，LULU 没有改。
 - LULU 启动器自身代码不链接以上任何库：Windows 端以子进程方式调用
   `moonlight-qt.exe`，安卓端以 Intent 方式调起 Moonlight；配对模块
-  （`launcher/lib/pairing/`）单独按 GPL-3.0 处理，见它的 README。
+  （`pairing_worker/`）是独立的 GPL-3.0-only 组件。构建产物附对应源码和完整许可，构建方法见该目录的 README。
 - Tailscale 不随包分发，见 `installer/VERSIONS.md` 里“为什么 Tailscale
   不随包分发”。
 - 没抄 LL-Remote 的任何代码（它没有 LICENSE 文件，`package.json` 是

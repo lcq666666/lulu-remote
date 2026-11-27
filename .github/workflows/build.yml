@@ -45,9 +45,15 @@ jobs:
       - name: Static analysis
         working-directory: launcher
         run: flutter analyze
-      - name: Pairing crypto tests (Sunshine golden vectors)
+      - name: Launcher tests
         working-directory: launcher
         run: flutter test
+      - name: Pairing worker tests and analysis
+        working-directory: pairing_worker
+        run: |
+          dart pub get
+          dart analyze lib bin test
+          dart test
 
   # --- 2. Windows: one installer for both roles -------------------------
   build-windows:
@@ -65,6 +71,18 @@ jobs:
           flutter create --platforms=windows --project-name=lulu_remote .
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           flutter build windows --release
+      - name: Build and stage the Windows pairing worker
+        shell: pwsh
+        run: ./installer/scripts/build-pairing-worker.ps1
+      - name: Test compiled pairing IPC
+        working-directory: launcher
+        shell: pwsh
+        run: |
+          $env:LULU_PAIRING_TEST_EXE = (Resolve-Path 'build/windows/x64/runner/Release/lulu_pairing_worker.exe').Path
+          flutter test test/pairing_worker_client_test.dart
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Set-Location ../pairing_worker
+          dart test test/worker_process_test.dart
       - name: Fetch Moonlight + Sunshine (verify hashes, fetch LICENSEs)
         shell: pwsh
         run: ./installer/scripts/fetch-components.ps1
@@ -123,35 +141,56 @@ jobs:
       - name: Generate missing Android runner files
         working-directory: launcher
         run: flutter create --platforms=android --org=com.lulu --project-name=remote --no-pub .
-      - name: Build APK (release, signed — only if keystore secrets exist)
-        if: ${{ steps.keystore.outputs.configured == 'true' }}
-        working-directory: launcher
+      - name: Prepare companion Gradle wrapper
         run: |
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > /tmp/lulu-release.keystore
-          cat > android/key.properties <<EOF
+          cp launcher/android/gradlew pairing_worker/android_app/android/
+          cp launcher/android/gradle/wrapper/gradle-wrapper.jar pairing_worker/android_app/android/gradle/wrapper/
+      - name: Configure a shared release signing identity
+        if: ${{ steps.keystore.outputs.configured == 'true' }}
+        run: |
+          umask 077
+          key_file="$RUNNER_TEMP/lulu-release.keystore"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$key_file"
+          for app in launcher pairing_worker/android_app; do
+            cat > "$app/android/key.properties" <<EOF
           storePassword=$ANDROID_KEYSTORE_PASSWORD
           keyPassword=$ANDROID_KEY_PASSWORD
           keyAlias=$ANDROID_KEY_ALIAS
-          storeFile=/tmp/lulu-release.keystore
+          storeFile=$key_file
           EOF
-          flutter pub get
-          flutter build apk --release
+          done
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      - name: Build APK (debug — no release keystore configured)
-        if: ${{ steps.keystore.outputs.configured == 'false' }}
-        working-directory: launcher
+      - name: Build matching Android APKs
+        env:
+          HAS_RELEASE_KEY: ${{ steps.keystore.outputs.configured }}
         run: |
-          flutter pub get
-          flutter build apk --debug
+          mode=debug
+          if [ "$HAS_RELEASE_KEY" = true ]; then mode=release; fi
+          for app in launcher pairing_worker/android_app; do
+            (cd "$app" && flutter pub get && flutter build apk "--$mode")
+          done
+          mkdir -p android-dist
+          cp "launcher/build/app/outputs/flutter-apk/app-$mode.apk" "android-dist/LULU-Remote-$mode.apk"
+          cp "pairing_worker/android_app/build/app/outputs/flutter-apk/app-$mode.apk" "android-dist/LULU-Pairing-Worker-$mode.apk"
+          git archive --format=zip --output=android-dist/LULU-Pairing-Worker-Source.zip HEAD pairing_worker installer/scripts/build-pairing-worker.ps1 .github/workflows/build.yml
+      - name: Verify matching Android signatures
+        run: |
+          apksigner="$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)"
+          certificate() {
+            "$apksigner" verify --print-certs "$1" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p'
+          }
+          launcher_cert="$(certificate android-dist/LULU-Remote-*.apk)"
+          worker_cert="$(certificate android-dist/LULU-Pairing-Worker-*.apk)"
+          test -n "$launcher_cert" && test "$launcher_cert" = "$worker_cert"
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: android-apk
-          path: launcher/build/app/outputs/flutter-apk/*.apk
+          path: android-dist/
           if-no-files-found: error
 
   # --- 4. Release (tags only) ---------------------------------------------
@@ -170,6 +209,7 @@ jobs:
             dist/windows-installers/dist/*.exe
             dist/windows-installers/dist/*.zip
             dist/android-apk/*.apk
+            dist/android-apk/LULU-Pairing-Worker-Source.zip
             dist/windows-installers/vendor/MANIFEST.md
           body: |
             ### 0.2.1 更新
@@ -186,7 +226,7 @@ jobs:
 
             ### Android
 
-            下载 APK 并在手机上安装。`app-debug.apk` 使用调试签名。
+            从同一个构建下载并安装 `LULU-Remote-*.apk` 和 `LULU-Pairing-Worker-*.apk`。文件名末尾为 `debug` 的 APK 使用调试签名。
             手机仍需安装 Moonlight，并在里面完成首次配对。跨网连接还需要配置组网。
 
             组件版本、校验值和许可信息见 `MANIFEST.md`。

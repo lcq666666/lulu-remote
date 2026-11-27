@@ -5,6 +5,11 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <permission
+        android:name="com.lulu.remote.permission.PAIRING_WORKER"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="com.lulu.remote.permission.PAIRING_WORKER" />
+
     <application
         android:label="LULU 远程"
         android:name="${applicationName}"
@@ -33,5 +38,6 @@
          LULU launches it via Intent; it does not embed it. -->
     <queries>
         <package android:name="com.limelight" />
+        <package android:name="com.lulu.remote.pairing" />
     </queries>
 </manifest>

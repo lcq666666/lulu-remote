@@ -30,7 +30,7 @@ This is the fix for the "too many separate downloads" complaint
 
 | Who | Needs |
 |---|---|
-| **User** (uses LULU) | One file per machine, from GitHub Releases: `LULU-Remote-Setup-*.exe` (control PC), `LULU-Host-Setup-*.exe` (each remote PC), `*.apk` (phone). Double-click, Next-Next-Finish. **No** Flutter, Visual Studio, Android SDK, or Inno Setup. |
+| **User** (uses LULU) | Packages from GitHub Releases: `LULU-Remote-Setup-*.exe` (control PC), `LULU-Host-Setup-*.exe` (each remote PC), `LULU-Remote-*.apk` and `LULU-Pairing-Worker-*.apk` (phone). **No** Flutter, Visual Studio, Android SDK, or Inno Setup. |
 | **CI** (builds LULU) | Flutter 3.22+, Inno Setup 6.x, JDK 17 — all installed by `.github/workflows/build.yml` on the runners. |
 | **Developer** (changes LULU code locally) | Same as CI, plus a Windows PC for `flutter build windows` and an Android SDK for `flutter build apk`. Local builds are for development only — release installers always come from CI. |
 
@@ -39,15 +39,15 @@ This is the fix for the "too many separate downloads" complaint
 `.github/workflows/build.yml`, on push to `main` and on `v*` tags:
 
 1. `flutter test` → `flutter analyze` (Linux job, fast fail).
-2. Windows job: `flutter build windows --release` →
+2. Windows job: `flutter build windows --release` and stage the pairing worker →
    `installer\scripts\fetch-components.ps1` (downloads Moonlight +
    Sunshine, writes `installer/vendor/MANIFEST.md`, fetches both
    LICENSE files, verifies the Tailscale MSI hash and deletes it) →
    `iscc` compiles both `.iss` files → installers uploaded as artifacts.
-3. Android job: `flutter build apk --release` when the keystore
+3. Android job builds the launcher and companion APK with matching signing identities. It uses `flutter build apk --release` when the keystore
    secrets exist (`ANDROID_KEYSTORE_BASE64` etc.), otherwise
    `flutter build apk --debug` and the file name says so.
-4. On `v*` tags only: the two installers + APK are attached to a
+4. On `v*` tags only: the two installers and both APKs are attached to a
    GitHub Release automatically.
 
 ## What you need (build machine — local dev only)
@@ -96,7 +96,8 @@ flutter test
 
 # 3. Windows
 flutter build windows --release
-#    Output: build\windows\x64\runner\Release\lulu_remote.exe
+..\installer\scripts\build-pairing-worker.ps1
+#    Output: build\windows\x64\runner\Release\lulu_remote.exe and lulu_pairing_worker.exe
 #    Ship it with the whole Release\ folder (flutter_windows.dll, data\).
 
 # 4. Android (debug APK, for the first phone test)
@@ -106,6 +107,10 @@ flutter build apk --debug
 # 5. Android (release APK, after you have a signing key)
 flutter build apk --release
 ```
+
+Both Android APKs are needed for in-app pairing. In CI the companion is built in
+`../pairing_worker/android_app/` after copying the generated Gradle wrapper
+from `android/`. Build both on the same machine for matching debug signatures.
 
 ## First-run checklist on the build machine
 
@@ -132,13 +137,13 @@ flutter build apk --release
 Do not present any of these as working until the named test passes:
 
 1. **Pairing handshake end-to-end.** The 4-phase `/pair` flow in
-   `lib/pairing/` follows the castaway notes byte-for-byte on paper
+   `../pairing_worker/` follows the castaway notes byte-for-byte on paper
    (AES key `SHA-256(salt || PIN)[..16]`, AES-128-ECB no padding,
    cert-signature = raw 256-byte X.509 `signatureValue`, phase 5
    `pairchallenge` over mutual TLS), but it has never run against a real
    Sunshine binary. First test: LAN, one host, `flutter test` golden
    vectors first, then a real pair, then `moonlight-qt list <host>`.
-2. **Dart X.509 generation / parsing.** `lib/pairing/client_identity.dart`
+2. **Dart X.509 generation / parsing.** `../pairing_worker/lib/src/client_identity.dart`
    builds the RSA-2048 self-signed cert (`CN=NVIDIA GameStream Client`)
    with hand-written DER via pointycastle ASN.1, and extracts the cert
    signature + RSA public key with a hand-written DER walker. This is
@@ -209,7 +214,7 @@ Do not present any of these as working until the named test passes:
   `../release/THIRD-PARTY.md`; the build-time `vendor/MANIFEST.md`
   carries the hashes actually downloaded. Ship their LICENSE texts
   (CI fetches them into the installers' `licenses\` folders).
-- `lib/pairing/` ships under GPL-3.0 (see its README). The rest of the
+- `../pairing_worker/` ships under GPL-3.0 (see its README). The rest of the
   launcher is MIT. Do not merge the two licences into one file.
 - Windows exe is unsigned in v1 — SmartScreen will warn. A code-signing
   certificate is the only fix; do not work around it with an installer

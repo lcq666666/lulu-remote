@@ -6,8 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/device.dart';
-import '../pairing/sunshine_pin_api.dart';
 import 'mesh_status_service.dart';
+import 'pairing_worker_client.dart';
 
 typedef _Account = ({String user, String password});
 
@@ -17,7 +17,7 @@ class HostTray {
 
   final navigator = GlobalKey<NavigatorState>();
   static const _channel = MethodChannel('lulu/host_tray');
-  final _api = SunshinePinApi();
+  final _api = PairingWorkerClient();
   final _local = Device(id: 'local', name: '本机', meshAddress: 'localhost');
   final _seen = <String, Duration>{};
   final _dismissed = <String>{};

@@ -1,11 +1,20 @@
-# lib/pairing/ — GameStream pairing module (GPL-3.0)
+# LULU 配对组件 · GPL-3.0-only
 
-This directory is **legally separate** from the rest of the launcher.
+`pairing_worker/` 包含原 GameStream 握手、加密和 Sunshine PIN API。源代码使用 GPL-3.0-only，完整许可见 `lib/COPYING`。启动器和它之间只传版本化的本机消息，启动器自身仍按仓库的 MIT 许可提供。
 
-- Licence: **GNU GPL-3.0**. The rest of `lib/` is MIT. Do not move files
-  between the two without a licence review, and do not copy code from
-  LL-Remote here (or anywhere) — LL-Remote has no LICENSE file and its
-  `package.json` is `"private": true`, so it is reference only.
+- Windows 的配对组件是与 `lulu_remote.exe` 同目录的 `lulu_pairing_worker.exe`。两个安装器随包安装该文件，并由 Inno Setup 的卸载记录清理。便携版随 ZIP 一起分发。
+- Android 从同一次构建安装 `LULU-Remote-*.apk` 和 `LULU-Pairing-Worker-*.apk`。配对 APK 运行在自己的进程里，无桌面图标。主应用通过 Android 签名权限与它通信。
+- Windows 使用匿名管道，Android 使用 Binder。消息涵盖发起配对、账号验证、查看待处理请求和手动批准。主应用负责显示 PIN、更新设备状态和访问系统安全存储。账号密码、配对私钥和证书不进入命令行、日志或磁盘上的交换文件。
+- Windows 安装目录的 `licenses/PAIRING-WORKER-SOURCE.zip` 与 Android 构建附件 `LULU-Pairing-Worker-Source.zip` 包含对应提交的组件源码、依赖锁文件和构建脚本。
+
+## 本地构建与测试
+
+用 Flutter 3.22.x 配套的 Dart 3.4 运行 `dart pub get`、`dart analyze lib bin test` 和 `dart test`。
+Windows 先构建启动器，再运行仓库根目录下的 `installer/scripts/build-pairing-worker.ps1`。将 `LULU_PAIRING_TEST_EXE` 指向编译好的 EXE 后，测试会额外通过子进程重放一次配对握手。
+Android 使用启动器的 Gradle wrapper，在 `android_app/` 里执行 `flutter build apk --debug`。同一台机器构建出的两个调试 APK 共用本机调试签名。发布构建共用 CI 配置的签名证书。
+
+## Protocol origins
+
 - What it does: the GameStream 4-phase `/pair` handshake against Sunshine,
   so LULU can show the 4-digit PIN **inside LULU** and submit it to
   Sunshine itself, instead of asking the user to open Moonlight's GUI.

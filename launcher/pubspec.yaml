@@ -13,17 +13,10 @@ dependencies:
   # Device list (non-secret fields only). Secrets live in flutter_secure_storage.
   shared_preferences: ^2.3.2
   flutter_secure_storage: ^9.2.4
-  # HTTP for Sunshine web UI (/api/pin) and NVHTTP XML responses.
-  http: ^1.2.2
-  # XML parsing for NVHTTP /serverinfo, /pair and /applist responses.
-  xml: ^6.5.0
-  # SHA-256 / general hashing (AES + RSA live in pointycastle).
-  crypto: ^3.0.6
-  # Pure-Dart crypto used ONLY by lib/pairing/ (GPL-3.0 module):
-  # AES-128-ECB, SHA-256, RSA-2048 sign/verify, ASN.1 DER.
-  pointycastle: ^4.0.0
   # Open Sunshine web UI / download pages as a fallback.
   url_launcher: ^6.3.1
+  # Windows mesh status XML diagnostics.
+  xml: ^6.5.0
 
 dev_dependencies:
   flutter_test:

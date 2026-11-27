@@ -21,7 +21,7 @@ import 'dart:typed_data';
 
 import 'package:pointycastle/export.dart';
 
-import '../services/secure_store.dart';
+import 'pairing_memory.dart';
 import 'gamestream_crypto.dart';
 
 class ClientIdentity {
@@ -41,7 +41,7 @@ class ClientIdentity {
 
   /// PEM of the private key (PKCS#8), for dart:io SecurityContext
   /// (mutual TLS in phase 5). The signing key itself is also stored as
-  /// JSON components in secure storage — see [SecureStore].
+  /// JSON components in secure storage — see [PairingMemory].
   final String keyPem;
 
   /// Lowercase hex of a random u64, generated once and persisted, sent
@@ -53,7 +53,7 @@ class ClientIdentity {
   Uint8List get certDer => pemToDer(certPem);
 
   /// Load the persisted identity, or generate + persist a new one.
-  static Future<ClientIdentity> loadOrGenerate(SecureStore store) async {
+  static Future<ClientIdentity> loadOrGenerate(PairingMemory store) async {
     final certPem = await store.readClientCertPem();
     final keyPem = await store.readClientKeyPem();
     final keyJson = await store.readClientKeyJson();
@@ -76,7 +76,7 @@ class ClientIdentity {
     return identity;
   }
 
-  static Future<String> _newUniqueId(SecureStore store) async {
+  static Future<String> _newUniqueId(PairingMemory store) async {
     final id = hexEncode(randomBytes(8));
     await store.writeUniqueId(id);
     return id;

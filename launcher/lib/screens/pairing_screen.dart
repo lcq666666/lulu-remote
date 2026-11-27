@@ -7,12 +7,10 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../app.dart';
 import '../models/device.dart';
-import '../pairing/pairing_errors.dart';
-import '../pairing/pairing_service.dart';
-import '../pairing/sunshine_pin_api.dart';
 import '../services/component_installer.dart';
 import '../services/mesh_status_service.dart';
 import '../services/moonlight_launcher.dart';
+import '../services/pairing_worker_client.dart';
 import '../services/secure_store.dart';
 import '../widgets/lulu_ui.dart';
 import '../widgets/pin_display.dart';
@@ -101,9 +99,9 @@ class _PairingScreenState extends State<PairingScreen> {
             '本机缺少 Moonlight，正在准备连接组件。',
           ));
           final result = await ComponentInstaller().prepareWindowsController();
-          if (!await launcher.isInstalled()) throw PairingTransport(result);
+          if (!await launcher.isInstalled()) throw PairingFailure(result);
         } else {
-          throw const PairingTransport('本机缺少 Moonlight。请在连接设置中安装连接组件。');
+          throw const PairingFailure('本机缺少 Moonlight。请在连接设置中安装连接组件。');
         }
       }
       if (!mounted) return;
@@ -113,7 +111,7 @@ class _PairingScreenState extends State<PairingScreen> {
       ));
       await _checkNetwork();
       if (!mounted) return;
-      final service = PairingService(secureStore: _secureStore);
+      final service = PairingWorkerClient(secureStore: _secureStore);
       final result = await service.pair(
         device: widget.device,
         adminUser: user,
@@ -136,8 +134,8 @@ class _PairingScreenState extends State<PairingScreen> {
         ),
       );
       if (!mounted) return;
-      Navigator.of(context).pop(result.device);
-    } on PairingException catch (error) {
+      Navigator.of(context).pop(result);
+    } on PairingFailure catch (error) {
       _fail(error.message);
     } on HttpException catch (error) {
       _fail(error.message);
@@ -186,7 +184,7 @@ class _PairingScreenState extends State<PairingScreen> {
     final mesh = MeshStatusService();
     final local = await mesh.localAddresses();
     if (mesh.isLocalAddress(device.meshAddress, local)) {
-      throw const PairingTransport(MeshStatusService.selfAddressMessage);
+      throw const PairingFailure(MeshStatusService.selfAddressMessage);
     }
     final target = '${device.meshAddress}:${device.sunshinePort}';
     final kind = NetworkKind.detect(device.meshAddress);
@@ -208,19 +206,19 @@ class _PairingScreenState extends State<PairingScreen> {
       socket.destroy();
     } on SocketException catch (error) {
       if (MeshStatusService.connectionRefused(error)) {
-        throw PairingTransport(
+        throw PairingFailure(
             '对方拒绝 TCP 连接（$target）。请在被控电脑开启远程服务（Sunshine）并核对端口。');
       }
-      if (await missingNetwork()) throw PairingTransport(missingMessage);
+      if (await missingNetwork()) throw PairingFailure(missingMessage);
       final code = error.osError?.errorCode;
       if (const {60, 110, 10060}.contains(code) ||
           (code == null && error.message.toLowerCase().contains('timed out'))) {
-        throw PairingTransport(timeoutMessage);
+        throw PairingFailure(timeoutMessage);
       }
-      throw PairingTransport(
+      throw PairingFailure(
           '无法连接 $target。请核对对方地址和网络连接（系统错误 ${code ?? '未知'}）。');
     } on TimeoutException {
-      throw PairingTransport(
+      throw PairingFailure(
           await missingNetwork() ? missingMessage : timeoutMessage);
     }
   }
@@ -230,7 +228,7 @@ class _PairingScreenState extends State<PairingScreen> {
     if (name == null) return;
     setState(() => _checkingRequest = true);
     try {
-      final requests = await SunshinePinApi().listPairings(
+      final requests = await PairingWorkerClient().listPairings(
           widget.device, _userController.text.trim(), _passwordController.text);
       if (!mounted || _requestName != name) return;
       setState(() => _pinStatus =

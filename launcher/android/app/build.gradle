@@ -45,9 +45,23 @@ android {
         versionName flutterVersionName
     }
 
+    def keyProperties = new Properties()
+    def keyPropertiesFile = rootProject.file('key.properties')
+    if (keyPropertiesFile.exists()) {
+        keyPropertiesFile.withInputStream { keyProperties.load(it) }
+        signingConfigs {
+            release {
+                keyAlias keyProperties['keyAlias']
+                keyPassword keyProperties['keyPassword']
+                storeFile file(keyProperties['storeFile'])
+                storePassword keyProperties['storePassword']
+            }
+        }
+    }
+
     buildTypes {
         release {
-            signingConfig signingConfigs.debug
+            signingConfig(keyPropertiesFile.exists() ? signingConfigs.release : signingConfigs.debug)
         }
     }
 }

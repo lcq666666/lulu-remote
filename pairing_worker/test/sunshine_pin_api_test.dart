@@ -1,9 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter_test/flutter_test.dart';
-import 'package:lulu_remote/models/device.dart';
-import 'package:lulu_remote/pairing/sunshine_pin_api.dart';
+import 'package:test/test.dart';
+import 'package:lulu_pairing_worker/src/device.dart';
+import 'package:lulu_pairing_worker/src/sunshine_pin_api.dart';
 
 class _LocalDevice extends Device {
   _LocalDevice(int port)

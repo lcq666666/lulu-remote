@@ -26,6 +26,8 @@
 - [ ] 启动器通过进程接口发起配对并读取结果，移除对 GPL 配对模块的直接导入。安装器随包安装配对进程，卸载时一起移除。仓库记录各部分的许可证边界。
 - [ ] 验收：分析和测试通过。真机分别走 v0.2.1 与拆分后的流程，确认发起配对、显示 PIN、自动提交与保存配对状态的结果一致。
 
+F00 开发记录：Windows 使用独立 EXE，Android 使用同一构建的独立配对 APK。已增加真实子进程与模拟 Sunshine 的回归测试。旧版、新版对同一台真实被控电脑的对照验收待完成，F00 仍保留未勾选状态。
+
 ### F01 隐私屏（三档）
 
 - [ ] 按隐私屏与自动锁屏设计的改 1 实现。新增 `launcher/lib/services/privacy_screen_service.dart`，管理显示、隐藏和会话状态。SharedPreferences 键为 `lulu_privacy_mode`（`off` / `black` / `image`，默认 `off`）和 `lulu_privacy_image`（可空本地路径）。

@@ -49,7 +49,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 ; LULU launcher (Flutter Windows release output).
-Source: "..\..\launcher\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\..\launcher\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "lulu_pairing_worker.exe"
+Source: "..\..\launcher\build\windows\x64\runner\Release\lulu_pairing_worker.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; Moonlight Qt installer, bundled (downloaded by fetch-components.ps1).
 ; Kept under {app}\vendor\ so the first-run wizard can re-run it.
 Source: "..\vendor\MoonlightSetup-6.2.0.exe"; DestDir: "{app}\vendor"; Flags: ignoreversion

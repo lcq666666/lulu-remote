@@ -43,7 +43,8 @@ Name: "en"; MessagesFile: "compiler:Default.isl"
 Name: "chs"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 
 [Files]
-Source: "..\..\launcher\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\..\launcher\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "lulu_pairing_worker.exe"
+Source: "..\..\launcher\build\windows\x64\runner\Release\lulu_pairing_worker.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\scripts\prepare-host.ps1"; DestDir: "{app}\vendor"; Flags: ignoreversion
 ; Sunshine installer, bundled (downloaded by fetch-components.ps1).
 ; Kept under {app}\vendor\ so it can be re-run by hand if needed.

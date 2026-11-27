@@ -32,8 +32,17 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private val channel = "lulu.remote/launch"
 
+    private var pairingWorker: PairingWorkerBridge? = null
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        pairingWorker?.dispose()
+        pairingWorker = null
+        super.cleanUpFlutterEngine(flutterEngine)
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        pairingWorker = PairingWorkerBridge(this, flutterEngine.dartExecutor.binaryMessenger)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channel)
             .setMethodCallHandler { call, result ->
                 when (call.method) {

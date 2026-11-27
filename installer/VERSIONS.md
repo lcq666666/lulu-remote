@@ -7,7 +7,8 @@
 
 | 组件 | 钉住版本 | 发布日期 | 许可 | 源码 / 发布页 | 怎么进安装包 |
 |---|---|---|---|---|---|
-| LULU 启动器（Flutter） | 0.1.0（本仓库 `launcher/`，`pubspec.yaml`） | — | MIT（壳子）；`lib/pairing/` 单独 GPL-3.0 | 本仓库 | CI 编译 `flutter build windows`，exe + DLL + data 直接装进安装包 |
+| LULU 启动器（Flutter） | 0.1.0（本仓库 `launcher/`，`pubspec.yaml`） | — | MIT（壳子） | 本仓库 | CI 编译 `flutter build windows`，exe + DLL + data 直接装进安装包 |
+| LULU 配对组件 | 随启动器构建 | — | GPL-3.0-only | 本仓库 `pairing_worker/` | Windows 安装器与便携版附独立 EXE。Android 同次构建提供单独 APK |
 | Moonlight Qt（Windows 控制端） | **v6.2.0** | 2026-10-04 | GPL-3.0 | https://github.com/moonlight-stream/moonlight-qt/releases/tag/v6.2.0 | CI 下载后**随包分发**：`installer/vendor/MoonlightSetup-6.2.0.exe`，安装时静默运行 |
 | Sunshine（Windows 被控端） | **v2026.914.233613** | 2026-09-14 | GPL-3.0 | https://github.com/LizardByte/Sunshine/releases/tag/v2026.914.233613（仓库已改名 SunshineStream/Sunshine，同一 release） | CI 下载后**随包分发**：`installer/vendor/Sunshine-Windows-AMD64-installer.msi`，安装时静默运行 |
 | Tailscale（Windows 组网） | **1.104.7** | 2026-11-12 | BSD-3-Clause（开源客户端/守护进程）；官方 Windows 图形客户端是独立产品 | https://tailscale.com/download/windows；源码 https://github.com/tailscale/tailscale | **不随包分发，安装时从官网下载**：`https://pkgs.tailscale.com/stable/tailscale-setup-1.104.7-amd64.msi`，下载完校验 SHA-256 再装 |

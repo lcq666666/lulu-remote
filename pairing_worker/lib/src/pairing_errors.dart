@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-only
+
 /// Pairing failures, kept apart deliberately: the recovery differs.
 ///
 /// - [PairingWrongPin] → the user retypes / LULU re-submits a PIN.

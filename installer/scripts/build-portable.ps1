@@ -14,6 +14,10 @@ if (!(Test-Path -LiteralPath (Join-Path $app 'lulu_remote.exe'))) {
     throw 'Windows launcher executable is missing.'
 }
 
+if (!(Test-Path -LiteralPath (Join-Path $app 'lulu_pairing_worker.exe'))) {
+    throw 'Windows pairing worker executable is missing.'
+}
+
 $appVendor = Join-Path $app 'vendor'
 $licenses = Join-Path $app 'licenses'
 New-Item -ItemType Directory -Path $appVendor, $licenses | Out-Null

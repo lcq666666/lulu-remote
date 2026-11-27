@@ -3,15 +3,14 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:flutter_test/flutter_test.dart';
-import 'package:lulu_remote/models/device.dart';
-import 'package:lulu_remote/pairing/client_identity.dart';
-import 'package:lulu_remote/pairing/gamestream_crypto.dart';
-import 'package:lulu_remote/pairing/pairing_errors.dart';
-import 'package:lulu_remote/pairing/pairing_service.dart';
-import 'package:lulu_remote/pairing/sunshine_pin_api.dart';
-import 'package:lulu_remote/services/secure_store.dart';
+import 'package:test/test.dart';
+import 'package:lulu_pairing_worker/src/device.dart';
+import 'package:lulu_pairing_worker/src/client_identity.dart';
+import 'package:lulu_pairing_worker/src/gamestream_crypto.dart';
+import 'package:lulu_pairing_worker/src/pairing_errors.dart';
+import 'package:lulu_pairing_worker/src/pairing_service.dart';
+import 'package:lulu_pairing_worker/src/sunshine_pin_api.dart';
+import 'package:lulu_pairing_worker/src/pairing_memory.dart';
 import 'package:pointycastle/export.dart';
 
 class _TestDevice extends Device {
@@ -32,7 +31,6 @@ void main() {
     test(
         'continues handshake while PIN response is pending (automatic: $automatic)',
         () async {
-      FlutterSecureStorage.setMockInitialValues({});
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       final device = _TestDevice(server.port);
       final certificate =
@@ -94,7 +92,7 @@ void main() {
         }
         await response.close();
       });
-      final result = PairingService(secureStore: SecureStore()).pair(
+      final result = PairingService(secureStore: PairingMemory()).pair(
         device: device,
         adminUser: 'test',
         adminPassword: 'test',
@@ -135,8 +133,7 @@ void main() {
 
   test('completes pairing and mutual TLS with a 0.1.5 client certificate',
       () async {
-    FlutterSecureStorage.setMockInitialValues({});
-    final store = SecureStore();
+    final store = PairingMemory();
     final client = await ClientIdentity.loadOrGenerate(store);
     // Preserve the previously stored identity when upgrading from 0.1.5.
     final clientCert = client.certDer;
