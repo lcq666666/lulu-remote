@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import '../models/device.dart';
@@ -13,7 +14,9 @@ import '../models/device.dart';
 /// by design (GameStream discovery). No secret is sent here.
 class MeshStatusService {
   Future<HostStatus> check(Device device) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 3);
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 3)
+      ..findProxy = (_) => 'DIRECT';
     try {
       final request = await client.getUrl(
         Uri.parse('${device.nvhttpBase}/serverinfo?uniqueid=lulu-probe'),
@@ -36,16 +39,63 @@ class MeshStatusService {
     }
   }
 
+  Future<bool> isLocalAddress(String host) async {
+    final normalized = host.trim().toLowerCase();
+    final address = InternetAddress.tryParse(normalized);
+    if (normalized == 'localhost' ||
+        normalized == Platform.localHostname.toLowerCase() ||
+        address?.isLoopback == true) {
+      return true;
+    }
+    if (address == null) return false;
+    try {
+      final interfaces = await NetworkInterface.list(includeLinkLocal: true);
+      if (interfaces
+          .any((interface) => interface.addresses.contains(address))) {
+        return true;
+      }
+    } on SocketException {
+      // A Tailscale address can still be verified through its CLI on Windows.
+    }
+    return address.address == await localMeshAddress();
+  }
+
+  Future<bool?> isTailscaleConnected() async {
+    if (!Platform.isWindows) return null;
+    try {
+      final result = await Process.run(
+        _tailscaleCommand(),
+        ['status', '--json'],
+      ).timeout(const Duration(seconds: 4));
+      final detail = jsonDecode(result.stdout as String);
+      final state = detail is Map ? detail['BackendState'] : null;
+      return state is String ? state == 'Running' : null;
+    } on Exception {
+      return null;
+    }
+  }
+
+  /// Checks whether the Tailscale tunnel answers independently of the app port.
+  Future<bool> answersTailscalePing(String address) async {
+    if (!Platform.isWindows) return false;
+    try {
+      final result = await Process.run(
+        _tailscaleCommand(),
+        ['ping', '--c', '1', '--timeout', '2s', address],
+      ).timeout(const Duration(seconds: 4));
+      return result.exitCode == 0;
+    } on Exception {
+      return false;
+    }
+  }
+
   /// Best-effort local mesh address (Windows: `tailscale ip`, else null).
   /// Used only for the footer hint; never for connecting.
   Future<String?> localMeshAddress() async {
     if (!Platform.isWindows) return null;
     try {
-      final installed = File(
-        '${Platform.environment['ProgramFiles']}\\Tailscale\\tailscale.exe',
-      );
       final result = await Process.run(
-        installed.existsSync() ? installed.path : 'tailscale',
+        _tailscaleCommand(),
         ['ip', '-4'],
       ).timeout(const Duration(seconds: 4));
       if (result.exitCode == 0) {
@@ -55,6 +105,13 @@ class MeshStatusService {
       // Tailscale CLI absent — footer shows "未知" instead.
     }
     return null;
+  }
+
+  String _tailscaleCommand() {
+    final installed = File(
+      '${Platform.environment['ProgramFiles']}\\Tailscale\\tailscale.exe',
+    );
+    return installed.existsSync() ? installed.path : 'tailscale';
   }
 }
 

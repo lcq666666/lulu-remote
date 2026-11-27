@@ -5,9 +5,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../models/device.dart';
 import '../services/component_installer.dart';
+import '../services/host_setup_service.dart';
 import '../services/mesh_status_service.dart';
+import '../widgets/incoming_pairing.dart';
 import 'setup_checklist_screen.dart';
 
 class ThisComputerScreen extends StatefulWidget {
@@ -21,7 +22,9 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
   static const _runKey = r'HKCU\Software\Microsoft\Windows\CurrentVersion\Run';
   static const _runName = 'LULU Remote';
   final _network = MeshStatusService();
-  bool _available = false;
+  final _hostSetup = HostSetupService();
+  WindowsHostState? _hostState;
+  bool get _available => _hostState == WindowsHostState.ready;
   bool _autoStart = false;
   bool _busy = true;
   List<({String label, String address})> _addresses = [];
@@ -60,16 +63,12 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
         ));
       }
     }
-    final status = await _network.check(Device(
-      id: 'local',
-      name: '这台电脑',
-      meshAddress: '127.0.0.1',
-    ));
+    final hostState = await _hostSetup.windowsHostState();
     final startup =
         await Process.run('reg.exe', ['query', _runKey, '/v', _runName]);
     if (!mounted) return;
     setState(() {
-      _available = status == HostStatus.online;
+      _hostState = hostState;
       _autoStart = startup.exitCode == 0;
       _addresses = [
         ...addresses,
@@ -116,9 +115,6 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
   Future<void> _enableHost() async {
     await ComponentInstaller().prepareWindowsHost();
     await _refresh();
-    if (mounted && !_available) {
-      setState(() => _message = '远程服务正在启动，请稍候刷新。');
-    }
   }
 
   @override
@@ -143,14 +139,15 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
               Text(Platform.localHostname,
                   style: Theme.of(context).textTheme.headlineSmall),
               const SizedBox(height: 8),
-              Text(_available ? '远程服务已开启' : '远程服务未开启'),
+              Text(_hostState?.message ?? '正在检查远程服务…'),
               if (_busy) const LinearProgressIndicator(),
               if (_message != null) ...[
                 const SizedBox(height: 8),
                 Text(_message!),
               ],
               const SizedBox(height: 16),
-              if (!_available)
+              if (_hostState == WindowsHostState.stopped ||
+                  _hostState == WindowsHostState.unknown)
                 Align(
                   alignment: Alignment.centerLeft,
                   child: ElevatedButton.icon(
@@ -160,6 +157,10 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
                   ),
                 ),
               const SizedBox(height: 24),
+              if (_available) ...[
+                IncomingPairing(checkHost: _hostSetup.windowsHostState),
+                const SizedBox(height: 24),
+              ],
               Text('这台电脑的地址', style: Theme.of(context).textTheme.titleMedium),
               if (_addresses.isNotEmpty)
                 const Padding(

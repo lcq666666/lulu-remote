@@ -13,13 +13,6 @@ import '../services/moonlight_launcher.dart';
 import '../services/secure_store.dart';
 import '../widgets/pin_display.dart';
 
-/// In-app pairing screen. The whole point: the user never opens Moonlight.
-///
-/// 1. Enter the Sunshine admin username/password for this attempt.
-/// 2. Tap 开始配对. LULU generates a 4-digit PIN, shows it here, starts
-///    the phase-1 /pair request, and submits the PIN to Sunshine itself.
-/// 3. Wait for phases 2–5. On success the device comes back paired with
-///    its AppId + host UUID resolved, and the home screen can connect.
 class PairingScreen extends StatefulWidget {
   const PairingScreen({super.key, required this.device});
   final Device device;
@@ -37,6 +30,7 @@ class _PairingScreenState extends State<PairingScreen> {
   String? _pin;
   String? _error;
   bool _running = false;
+  bool _automatic = false;
   PairingPhase? _phase;
 
   @override
@@ -62,7 +56,7 @@ class _PairingScreenState extends State<PairingScreen> {
   Future<void> _start() async {
     final user = _userController.text.trim();
     final password = _passwordController.text;
-    if (user.isEmpty || password.isEmpty) {
+    if (_automatic && (user.isEmpty || password.isEmpty)) {
       setState(() {
         _phase = null;
         _error = '请输入对方电脑的远程管理账号和密码。';
@@ -103,8 +97,8 @@ class _PairingScreenState extends State<PairingScreen> {
       final service = PairingService(secureStore: _secureStore);
       final result = await service.pair(
         device: widget.device,
-        adminUser: user,
-        adminPassword: password,
+        adminUser: _automatic ? user : null,
+        adminPassword: _automatic ? password : null,
         onProgress: _showProgress,
       );
       if (!mounted) return;
@@ -129,7 +123,11 @@ class _PairingScreenState extends State<PairingScreen> {
     } on HttpException catch (error) {
       _fail(error.message);
     } on TimeoutException {
-      _fail('等待对方响应超时。请确认被控电脑在线，再重试当前步骤。');
+      _fail(
+        _phase == PairingPhase.challenging || _phase == PairingPhase.verifying
+            ? '对方已收到配对码，但后续配对验证超时。请重试。'
+            : '等待对方响应超时。请确认地址、跨网网络和对方远程服务，再重试当前步骤。',
+      );
     } on SocketException {
       _fail('连接中断。请确认两台电脑的网络仍然连接，再重试。');
     } catch (_) {
@@ -157,6 +155,12 @@ class _PairingScreenState extends State<PairingScreen> {
   Future<void> _checkNetwork() async {
     final device = widget.device;
     final address = InternetAddress.tryParse(device.meshAddress);
+    final mesh = MeshStatusService();
+    if (await mesh.isLocalAddress(device.meshAddress)) {
+      throw const PairingTransport(
+        '这个地址属于你正在使用的电脑。请在被控电脑打开 LULU「让别人连接我」，复制它显示的地址。',
+      );
+    }
     final octets = address?.rawAddress;
     final tailscaleAddress = octets != null &&
         octets.length == 4 &&
@@ -172,10 +176,18 @@ class _PairingScreenState extends State<PairingScreen> {
       socket.destroy();
     } on SocketException {
       final target = '${device.meshAddress}:${device.sunshinePort}';
-      if (tailscaleAddress &&
-          Platform.isWindows &&
-          await MeshStatusService().localMeshAddress() == null) {
-        throw PairingTransport('本机未取得 Tailscale 地址。请先连接跨网网络，再重试 $target。');
+      if (tailscaleAddress && Platform.isWindows) {
+        final connected = await mesh.isTailscaleConnected();
+        if (connected == false ||
+            (connected == null && await mesh.localMeshAddress() == null)) {
+          throw const PairingTransport('本机还没连接跨网网络。请先打开 Tailscale，再重试。');
+        }
+        if (await mesh.answersTailscalePing(device.meshAddress)) {
+          throw PairingTransport(
+            '已通过 Tailscale 找到对方电脑，但远程连接入口 $target 无法访问。'
+            '请在被控电脑打开 LULU「让别人连接我」，确认服务已就绪后再试。',
+          );
+        }
       }
       throw PairingTransport(tailscaleAddress
           ? '连不上 $target。请确认两台电脑登录同一个 Tailscale 网络，地址填的是被控电脑的跨网地址，且对方已开启远程控制。'
@@ -185,7 +197,7 @@ class _PairingScreenState extends State<PairingScreen> {
 
   static const _steps = {
     PairingPhase.checkingClient: '本机连接组件',
-    PairingPhase.checkingNetwork: '网络与对方地址',
+    PairingPhase.checkingNetwork: '能否连到对方电脑',
     PairingPhase.checkingHost: '对方远程服务（Sunshine）',
     PairingPhase.checkingAccount: '对方管理账号与访问权限',
     PairingPhase.starting: '准备本机配对身份',
@@ -207,37 +219,49 @@ class _PairingScreenState extends State<PairingScreen> {
           child: ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              const Text(
-                '请在对方的同意下，使用那台电脑的远程管理账号完成首次授权。',
-                style: TextStyle(color: LuluTheme.muted),
+              if (!_automatic) const Text('在被控电脑上打开「让别人连接我」，点「等待连接请求」。'),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('使用对方管理账号自动配对'),
+                value: _automatic,
+                onChanged: _running
+                    ? null
+                    : (value) => setState(() {
+                          _automatic = value;
+                          _phase = null;
+                          _error = null;
+                        }),
               ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _userController,
-                enabled: !_running,
-                decoration: const InputDecoration(
-                  labelText: '对方电脑的管理账号',
+              if (_automatic) ...[
+                TextField(
+                  controller: _userController,
+                  enabled: !_running,
+                  decoration: const InputDecoration(
+                    labelText: '对方电脑的管理账号',
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _passwordController,
-                enabled: !_running,
-                obscureText: true,
-                decoration: const InputDecoration(
-                  labelText: '对方电脑的管理密码',
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _passwordController,
+                  enabled: !_running,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: '对方电脑的管理密码',
+                  ),
                 ),
-              ),
+              ],
               const SizedBox(height: 16),
               ElevatedButton(
                 onPressed: _running ? null : _start,
-                child: Text(_running ? '正在验证…' : '确认授权'),
+                child: Text(_running ? '正在配对…' : '发起配对'),
               ),
               if (_running && _pin != null) ...[
                 const SizedBox(height: 16),
                 PinDisplay(
                   pin: _pin!,
-                  subtitle: 'LULU 会自动提交此 PIN。',
+                  subtitle: _automatic
+                      ? 'LULU 会自动提交此 PIN。'
+                      : '请在被控电脑的「有设备请求连接」弹窗里输入此码。',
                 ),
               ],
               const SizedBox(height: 20),
@@ -262,7 +286,12 @@ class _PairingScreenState extends State<PairingScreen> {
                   ),
                 ),
               const SizedBox(height: 4),
-              for (final (index, step) in _steps.entries.indexed)
+              for (final (index, step) in _steps.entries
+                  .where((entry) =>
+                      _automatic ||
+                      (entry.key != PairingPhase.checkingAccount &&
+                          entry.key != PairingPhase.submittingPin))
+                  .indexed)
                 _buildStep(index, step),
             ],
           ),

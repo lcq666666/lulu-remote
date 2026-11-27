@@ -85,10 +85,20 @@ class ComponentInstaller {
       '-File',
       '"$script"',
     ]);
-    if (code != 0) {
-      throw StateError(code == 3010
-          ? '组件已安装，请在方便时重启电脑，再开启远程控制。'
-          : '开启失败。请确认已同意 Windows 管理员提示后重试（$code）。');
+    switch (code) {
+      case 0:
+        return;
+      case 1223:
+        throw StateError('Windows 的管理员确认被取消了。请在被控电脑的屏幕上重新点「允许远程控制」，然后点「是」。');
+      case 5:
+      case 740:
+        throw StateError('Windows 拒绝了管理员权限。请用这台电脑的管理员账号开启远程控制（$code）。');
+      case 3010:
+        throw StateError('组件已安装，请在方便时重启电脑，再开启远程控制。');
+      case -1:
+        throw StateError('无法启动 Windows 的远程服务设置。请确认压缩包已完整解压再重试。');
+      default:
+        throw StateError('远程服务设置未完成（Windows 返回 $code）。');
     }
   }
 
@@ -163,8 +173,17 @@ class ComponentInstaller {
       final result = await Process.run('powershell.exe', [
         '-NoProfile',
         '-Command',
-        'Start-Process -FilePath ${quote(program)} -ArgumentList $quoted '
-            '-Verb RunAs -WindowStyle Hidden -Wait -PassThru | Select-Object -ExpandProperty ExitCode',
+        'try { '
+            '\$process = Start-Process -FilePath ${quote(program)} -ArgumentList $quoted '
+            '-Verb RunAs -WindowStyle Hidden -Wait -PassThru -ErrorAction Stop; '
+            '[Console]::WriteLine(\$process.ExitCode) '
+            '} catch { '
+            '\$failure = \$_.Exception; '
+            'while (\$failure -and \$failure -isnot [ComponentModel.Win32Exception]) { '
+            '\$failure = \$failure.InnerException }; '
+            'if (\$failure) { [Console]::WriteLine(\$failure.NativeErrorCode) } '
+            'else { [Console]::WriteLine(-1) } '
+            '}',
       ]);
       return int.tryParse((result.stdout as String).trim()) ?? -1;
     } on ProcessException {

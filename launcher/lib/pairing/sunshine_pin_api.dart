@@ -24,7 +24,7 @@ class SunshinePinApi {
     required String adminUser,
     required String adminPassword,
   }) async {
-    await _listPairings(device, adminUser, adminPassword);
+    await listPairings(device, adminUser, adminPassword);
   }
 
   /// Submit [pin] for the pending pairing session on [device].
@@ -59,6 +59,26 @@ class SunshinePinApi {
       checkPendingRequest: checkPendingRequest,
     );
     onRequestFound?.call();
+    await approveRequest(
+      device: device,
+      pin: pin,
+      adminUser: adminUser,
+      adminPassword: adminPassword,
+      pairingId: pairingId,
+      clientName: clientName,
+      checkPendingRequest: checkPendingRequest,
+    );
+  }
+
+  Future<void> approveRequest({
+    required Device device,
+    required String pin,
+    required String adminUser,
+    required String adminPassword,
+    required String pairingId,
+    required String clientName,
+    void Function()? checkPendingRequest,
+  }) async {
     final body = <String, dynamic>{
       'pin': pin,
       'name': clientName,
@@ -90,8 +110,12 @@ class SunshinePinApi {
       request.headers.set('X-CSRF-Token', token);
       request.headers.contentType = ContentType.json;
       request.write(jsonEncode(body));
-      final response =
-          await request.close().timeout(const Duration(seconds: 5));
+      final response = await request.close().timeout(
+            const Duration(seconds: 35),
+            onTimeout: () => throw const HttpException(
+              '等待 Sunshine 返回 PIN 提交结果超时。',
+            ),
+          );
       if (response.statusCode == 401) {
         _requireManagementAccess(response.statusCode);
       }
@@ -124,14 +148,10 @@ class SunshinePinApi {
     final deadline = DateTime.now().add(const Duration(seconds: 30));
     while (DateTime.now().isBefore(deadline)) {
       checkPendingRequest?.call();
-      final requests = await _listPairings(device, adminUser, adminPassword);
+      final requests = await listPairings(device, adminUser, adminPassword);
       checkPendingRequest?.call();
       for (final request in requests) {
-        if (request is! Map || request['name'] != requestName) continue;
-        final id = request['id'];
-        if (id is String && RegExp(r'^[a-fA-F0-9]{32}$').hasMatch(id)) {
-          return id;
-        }
+        if (request.name == requestName) return request.id;
       }
       await Future<void>.delayed(const Duration(seconds: 1));
     }
@@ -139,7 +159,7 @@ class SunshinePinApi {
     throw const HttpException('对方未登记本次配对请求。请确认对方开启了远程服务，再重试。');
   }
 
-  Future<List<dynamic>> _listPairings(
+  Future<List<({String id, String name, String address})>> listPairings(
     Device device,
     String user,
     String password,
@@ -160,7 +180,18 @@ class SunshinePinApi {
       if (result is! Map || result['pairings'] is! List) {
         throw const HttpException('对方电脑的配对接口版本不兼容。');
       }
-      return result['pairings'] as List<dynamic>;
+      return [
+        for (final entry in result['pairings'] as List)
+          if (entry is Map &&
+              entry['id'] is String &&
+              RegExp(r'^[a-fA-F0-9]{32}$').hasMatch(entry['id'] as String))
+            (
+              id: entry['id'] as String,
+              name: entry['name'] is String ? entry['name'] as String : '新设备',
+              address:
+                  entry['address'] is String ? entry['address'] as String : '',
+            ),
+      ];
     } on SocketException {
       throw HttpException(
           '远程服务可达，但无法访问对方的管理端口 ${device.webPort}。请检查对方的防火墙和管理端口。');
@@ -192,6 +223,9 @@ class SunshinePinApi {
   HttpClient _client() {
     final client = _clientFactory();
     client.connectionTimeout = const Duration(seconds: 5);
+    // Sunshine is reached over the user's LAN or Tailscale address. A
+    // browser/system proxy must not intercept the pairing control channel.
+    client.findProxy = (_) => 'DIRECT';
     // TOFU for the PIN submission only — see the trust note above.
     client.badCertificateCallback = (_, __, ___) => true;
     return client;
