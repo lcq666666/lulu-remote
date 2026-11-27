@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lulu_remote/services/file_transfer_service.dart';
 import 'package:lulu_remote/services/host_tools_service.dart';
+import 'package:lulu_remote/services/host_hardware.dart';
 
 void main() {
   late HttpServer listener;
@@ -16,6 +17,12 @@ void main() {
     server = HostToolsServer(
         code: code,
         readDiagnostics: () async => '电脑名称：TEST-PC',
+        readHardware: () async => const HostHardware(
+            cpu: 'TEST CPU',
+            ramBytes: 17179869184,
+            diskBytes: 107374182400,
+            diskFreeBytes: 53687091200,
+            os: 'Windows TEST'),
         readClipboard: () async => clipboard,
         writeClipboard: (value) async {
           clipboard = value;
@@ -73,4 +80,23 @@ void main() {
       raw.close(force: true);
     }
   });
+
+  test('hardware opt-in returns the four expected measurements', () async {
+    server.diagnosticsEnabled = true;
+    await expectLater(client.hardware(), throwsA(isA<HostToolsException>()));
+    server.hardwareEnabled = true;
+    final hardware = await client.hardware();
+    expect(hardware.summary, contains('TEST CPU'));
+    expect(hardware.summary, contains('16.0 GiB'));
+    expect(hardware.summary, contains('50.0 GiB 可用 / 100.0 GiB'));
+    expect(hardware.summary, contains('Windows TEST'));
+  });
+
+  test('reads the real local Windows CIM snapshot', () async {
+    final hardware = await HostHardware.readWindows();
+    expect(hardware.cpu, isNotEmpty);
+    expect(hardware.os, contains('Windows'));
+    expect(hardware.ramBytes, greaterThan(0));
+    expect(hardware.diskBytes, greaterThanOrEqualTo(hardware.diskFreeBytes));
+  }, skip: !Platform.isWindows);
 }

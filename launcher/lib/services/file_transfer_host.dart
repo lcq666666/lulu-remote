@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'file_transfer_service.dart';
+import 'host_hardware.dart';
 import 'host_tools_service.dart';
 import 'mesh_status_service.dart';
 import 'power_service.dart';
@@ -35,6 +36,7 @@ class FileTransferHost {
   Future<String>? _readingToolsCode;
   static const _clipboardKey = 'qg_clipboard_enabled';
   static const _diagnosticsKey = 'qg_diagnostics_enabled';
+  static const _hardwareKey = 'qg_hardware_enabled';
   Future<String>? _readingCode;
   int _settingsGeneration = 0;
   Timer? _timer;
@@ -165,6 +167,20 @@ class FileTransferHost {
     await refresh();
   }
 
+  Future<bool> hardwareEnabled() async =>
+      (await SharedPreferences.getInstance()).getBool(_hardwareKey) ?? false;
+
+  Future<void> setHardwareEnabled(bool enabled) async {
+    _settingsGeneration++;
+    if (!enabled) _tools?.hardwareEnabled = false;
+    final prefs = await SharedPreferences.getInstance();
+    if (!await prefs.setBool(_hardwareKey, enabled)) {
+      await prefs.reload();
+      throw StateError('无法保存硬件信息设置。');
+    }
+    await refresh();
+  }
+
   Future<String> _diagnostics() async {
     var listening = true;
     try {
@@ -233,8 +249,13 @@ class FileTransferHost {
       final powerEnabled = await PowerAccess.instance.isEnabled();
       final clipboard = await clipboardEnabled();
       final diagnostics = await diagnosticsEnabled();
+      final hardware = await hardwareEnabled();
       if (_timer == null ||
-          !(fileEnabled || powerEnabled || clipboard || diagnostics)) {
+          !(fileEnabled ||
+              powerEnabled ||
+              clipboard ||
+              diagnostics ||
+              hardware)) {
         await _disableCurrent();
         return;
       }
@@ -242,7 +263,8 @@ class FileTransferHost {
       final secret = fileEnabled ? await code() : null;
       final powerSecret =
           powerEnabled ? await PowerAccess.instance.code() : null;
-      final toolsSecret = clipboard || diagnostics ? await toolsCode() : null;
+      final toolsSecret =
+          clipboard || diagnostics || hardware ? await toolsCode() : null;
       final addresses = (await MeshStatusService().localAddresses())
           .where((entry) =>
               entry.network != null && isPrivateTransferAddress(entry.address))
@@ -273,6 +295,7 @@ class FileTransferHost {
         _tools = HostToolsServer(
           code: toolsSecret,
           readDiagnostics: _diagnostics,
+          readHardware: HostHardware.readWindows,
           readClipboard: () async =>
               (await Clipboard.getData(Clipboard.kTextPlain))?.text ?? '',
           writeClipboard: (text) =>
@@ -281,7 +304,8 @@ class FileTransferHost {
       }
       _tools
         ?..clipboardEnabled = clipboard
-        ..diagnosticsEnabled = diagnostics;
+        ..diagnosticsEnabled = diagnostics
+        ..hardwareEnabled = hardware;
       final expired = _listeners.keys
           .where((address) => !addresses.contains(address))
           .toList();

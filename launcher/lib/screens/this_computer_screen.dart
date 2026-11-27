@@ -13,7 +13,7 @@ import '../widgets/auto_lock_tile.dart';
 import '../widgets/lulu_ui.dart';
 import '../widgets/connection_log_view.dart';
 import '../widgets/file_transfer_settings.dart';
-import '../widgets/clipboard_share.dart';
+import '../widgets/host_tools.dart';
 import '../widgets/privacy_screen_settings.dart';
 import '../widgets/power_settings.dart';
 import 'setup_checklist_screen.dart';
@@ -346,8 +346,9 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
           const Divider(),
           const PowerSettings(),
           const Divider(),
-          const ClipboardSettings(),
-          const ClipboardSettings(diagnostics: true),
+          const HostToolsSettings(),
+          const HostToolsSettings(panel: HostToolPanel.diagnostics),
+          const HostToolsSettings(panel: HostToolPanel.hardware),
           const Divider(),
           ListTile(
             leading: const Icon(Icons.history),

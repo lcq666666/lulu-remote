@@ -7,15 +7,17 @@ import '../services/host_tools_service.dart';
 import '../services/secure_store.dart';
 import 'lulu_ui.dart';
 
-class ClipboardSettings extends StatefulWidget {
-  const ClipboardSettings({super.key, this.diagnostics = false});
-  final bool diagnostics;
+enum HostToolPanel { clipboard, diagnostics, hardware }
+
+class HostToolsSettings extends StatefulWidget {
+  const HostToolsSettings({super.key, this.panel = HostToolPanel.clipboard});
+  final HostToolPanel panel;
 
   @override
-  State<ClipboardSettings> createState() => _ClipboardSettingsState();
+  State<HostToolsSettings> createState() => _HostToolsSettingsState();
 }
 
-class _ClipboardSettingsState extends State<ClipboardSettings> {
+class _HostToolsSettingsState extends State<HostToolsSettings> {
   final _host = FileTransferHost.instance;
   bool? _enabled;
   bool _busy = false;
@@ -24,9 +26,11 @@ class _ClipboardSettingsState extends State<ClipboardSettings> {
   void initState() {
     super.initState();
     _run(() async {
-      final enabled = widget.diagnostics
-          ? await _host.diagnosticsEnabled()
-          : await _host.clipboardEnabled();
+      final enabled = await switch (widget.panel) {
+        HostToolPanel.clipboard => _host.clipboardEnabled(),
+        HostToolPanel.diagnostics => _host.diagnosticsEnabled(),
+        HostToolPanel.hardware => _host.hardwareEnabled(),
+      };
       if (mounted) setState(() => _enabled = enabled);
     });
   }
@@ -37,7 +41,7 @@ class _ClipboardSettingsState extends State<ClipboardSettings> {
     try {
       await action();
     } catch (_) {
-      if (mounted) showLuluSnack(context, '无法读取或更新剪贴板设置。');
+      if (mounted) showLuluSnack(context, '无法读取或更新协作设置。');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -55,19 +59,28 @@ class _ClipboardSettingsState extends State<ClipboardSettings> {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            title: Text(widget.diagnostics ? '允许远程连接诊断' : '共享文本剪贴板'),
-            subtitle: Text(widget.diagnostics
-                ? '持协作码的控制端可查询电脑名称和远程服务状态。'
-                : '开启后，持协作码的控制端可手动读取或替换本机剪贴板文本。'),
+            title: Text(switch (widget.panel) {
+              HostToolPanel.clipboard => '共享文本剪贴板',
+              HostToolPanel.diagnostics => '允许远程连接诊断',
+              HostToolPanel.hardware => '共享硬件信息',
+            }),
+            subtitle: Text(switch (widget.panel) {
+              HostToolPanel.clipboard => '持协作码的控制端可手动读取或替换本机剪贴板文本。',
+              HostToolPanel.diagnostics => '持协作码的控制端可查询电脑名称和远程服务状态。',
+              HostToolPanel.hardware => '持协作码的控制端可查看 CPU、内存、系统盘容量和 Windows 版本。',
+            }),
             value: _enabled ?? false,
             onChanged: _busy || _enabled == null
                 ? null
                 : (value) => _run(() async {
-                      if (widget.diagnostics) {
-                        await _host.setDiagnosticsEnabled(value);
-                      } else {
-                        await _host.setClipboardEnabled(value);
-                      }
+                      await switch (widget.panel) {
+                        HostToolPanel.clipboard =>
+                          _host.setClipboardEnabled(value),
+                        HostToolPanel.diagnostics =>
+                          _host.setDiagnosticsEnabled(value),
+                        HostToolPanel.hardware =>
+                          _host.setHardwareEnabled(value),
+                      };
                       if (mounted) setState(() => _enabled = value);
                     }),
           ),
@@ -85,17 +98,17 @@ class _ClipboardSettingsState extends State<ClipboardSettings> {
       );
 }
 
-class ClipboardShareDialog extends StatefulWidget {
-  const ClipboardShareDialog(
-      {super.key, required this.device, this.diagnostics = false});
-  final bool diagnostics;
+class HostToolsDialog extends StatefulWidget {
+  const HostToolsDialog(
+      {super.key, required this.device, this.panel = HostToolPanel.clipboard});
+  final HostToolPanel panel;
   final Device device;
 
   @override
-  State<ClipboardShareDialog> createState() => _ClipboardShareDialogState();
+  State<HostToolsDialog> createState() => _HostToolsDialogState();
 }
 
-class _ClipboardShareDialogState extends State<ClipboardShareDialog> {
+class _HostToolsDialogState extends State<HostToolsDialog> {
   final _code = TextEditingController();
   final _secure = SecureStore();
   bool _loading = true;
@@ -119,6 +132,12 @@ class _ClipboardShareDialogState extends State<ClipboardShareDialog> {
     }
   }
 
+  String get _title => switch (widget.panel) {
+        HostToolPanel.clipboard => '文本剪贴板',
+        HostToolPanel.diagnostics => '连接诊断',
+        HostToolPanel.hardware => '硬件信息',
+      };
+
   Future<void> _exchange({required bool send}) async {
     if (_busy) return;
     final address = widget.device.meshAddress;
@@ -134,7 +153,9 @@ class _ClipboardShareDialogState extends State<ClipboardShareDialog> {
     try {
       final client = HostToolsClient(address, code);
       String? result;
-      if (widget.diagnostics) {
+      if (widget.panel == HostToolPanel.hardware) {
+        result = (await client.hardware()).summary;
+      } else if (widget.panel == HostToolPanel.diagnostics) {
         result = await client.diagnostics();
       } else if (send) {
         await client.writeClipboard(
@@ -156,7 +177,7 @@ class _ClipboardShareDialogState extends State<ClipboardShareDialog> {
     } on HostToolsException catch (error) {
       if (mounted) setState(() => _message = error.message);
     } catch (_) {
-      if (mounted) setState(() => _message = '暂时无法访问系统剪贴板。');
+      if (mounted) setState(() => _message = '暂时无法完成操作。');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -171,15 +192,17 @@ class _ClipboardShareDialogState extends State<ClipboardShareDialog> {
   @override
   Widget build(BuildContext context) => AlertDialog(
         scrollable: true,
-        title: Text(
-            '${widget.diagnostics ? '连接诊断' : '文本剪贴板'} · ${widget.device.displayName}'),
+        title: Text('$_title · ${widget.device.displayName}'),
         content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(widget.diagnostics
-                  ? '先在被控端打开「允许远程连接诊断」。'
-                  : '先在被控端打开「共享文本剪贴板」。发送或接收会替换目标设备的剪贴板文本。'),
+              Text(switch (widget.panel) {
+                HostToolPanel.clipboard =>
+                  '先在被控端打开「共享文本剪贴板」。发送或接收会替换目标设备的剪贴板文本。',
+                HostToolPanel.diagnostics => '先在被控端打开「允许远程连接诊断」。',
+                HostToolPanel.hardware => '先在被控端打开「共享硬件信息」。',
+              }),
               const SizedBox(height: 12),
               TextField(
                   controller: _code,
@@ -192,13 +215,13 @@ class _ClipboardShareDialogState extends State<ClipboardShareDialog> {
               if (_message case final message?)
                 Padding(
                     padding: const EdgeInsets.only(top: 12),
-                    child: Text(message)),
+                    child: SelectableText(message)),
             ]),
         actions: [
           TextButton(
               onPressed: _busy ? null : () => Navigator.pop(context),
               child: const Text('关闭')),
-          if (!widget.diagnostics)
+          if (widget.panel == HostToolPanel.clipboard)
             OutlinedButton(
                 onPressed:
                     _busy || _loading ? null : () => _exchange(send: false),
@@ -206,8 +229,10 @@ class _ClipboardShareDialogState extends State<ClipboardShareDialog> {
           FilledButton(
               onPressed: _busy || _loading
                   ? null
-                  : () => _exchange(send: !widget.diagnostics),
-              child: Text(widget.diagnostics ? '查询' : '发送本机文本')),
+                  : () =>
+                      _exchange(send: widget.panel == HostToolPanel.clipboard),
+              child: Text(
+                  widget.panel == HostToolPanel.clipboard ? '发送本机文本' : '查询')),
         ],
       );
 }

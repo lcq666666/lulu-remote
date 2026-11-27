@@ -18,7 +18,7 @@ import '../services/power_service.dart';
 import '../services/secure_store.dart';
 import '../services/wake_on_lan.dart';
 import '../widgets/device_card.dart';
-import '../widgets/clipboard_share.dart';
+import '../widgets/host_tools.dart';
 import '../widgets/file_transfer_dialog.dart';
 import '../widgets/lulu_ui.dart';
 import '../widgets/power_settings.dart';
@@ -813,17 +813,24 @@ class _HomeScreenState extends State<HomeScreen> {
                                         builder: (_) =>
                                             FileTransferDialog(device: device),
                                       ),
+                                      onHardware: () => showDialog<void>(
+                                          context: context,
+                                          barrierDismissible: false,
+                                          builder: (_) => HostToolsDialog(
+                                              device: device,
+                                              panel: HostToolPanel.hardware)),
                                       onDiagnostics: () => showDialog<void>(
                                           context: context,
                                           barrierDismissible: false,
-                                          builder: (_) => ClipboardShareDialog(
+                                          builder: (_) => HostToolsDialog(
                                               device: device,
-                                              diagnostics: true)),
+                                              panel:
+                                                  HostToolPanel.diagnostics)),
                                       onClipboard: () => showDialog<void>(
                                         context: context,
                                         barrierDismissible: false,
-                                        builder: (_) => ClipboardShareDialog(
-                                            device: device),
+                                        builder: (_) =>
+                                            HostToolsDialog(device: device),
                                       ),
                                       onPower: (action) =>
                                           _powerAction(device, action),

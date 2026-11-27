@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:cryptography/cryptography.dart';
 
 import 'file_transfer_service.dart';
+import 'host_hardware.dart';
 
 const _path = '/v1/host-tools/';
 const _timeout = Duration(seconds: 8);
@@ -52,13 +53,16 @@ class HostToolsServer {
       {required this.code,
       required this.readClipboard,
       required this.writeClipboard,
-      this.readDiagnostics});
+      this.readDiagnostics,
+      this.readHardware});
 
   final String code;
   final Future<String> Function() readClipboard;
   final Future<void> Function(String) writeClipboard;
   final Future<String> Function()? readDiagnostics;
+  final Future<HostHardware> Function()? readHardware;
   bool clipboardEnabled = false;
+  bool hardwareEnabled = false;
   bool diagnosticsEnabled = false;
   bool active = true;
   final _issued = <String, Duration>{};
@@ -69,9 +73,11 @@ class HostToolsServer {
   bool _allows(String operation) =>
       active &&
       switch (operation) {
-        'challenge' => clipboardEnabled || diagnosticsEnabled,
+        'challenge' =>
+          clipboardEnabled || diagnosticsEnabled || hardwareEnabled,
         'clipboard-read' || 'clipboard-write' => clipboardEnabled,
         'diagnostics' => diagnosticsEnabled && readDiagnostics != null,
+        'hardware' => hardwareEnabled && readHardware != null,
         _ => false,
       };
 
@@ -96,7 +102,8 @@ class HostToolsServer {
             'challenge',
             'clipboard-read',
             'clipboard-write',
-            'diagnostics'
+            'diagnostics',
+            'hardware'
           }.contains(operation)) {
         response.statusCode = HttpStatus.badRequest;
         return;
@@ -139,7 +146,10 @@ class HostToolsServer {
           response.statusCode = HttpStatus.unauthorized;
           return;
         }
-        if (operation == 'diagnostics') {
+        if (operation == 'hardware') {
+          result = utf8.encode(
+              jsonEncode((await readHardware!().timeout(_timeout)).toJson()));
+        } else if (operation == 'diagnostics') {
           result = utf8.encode(await readDiagnostics!().timeout(_timeout));
         } else if (operation == 'clipboard-read') {
           result = utf8.encode(await readClipboard().timeout(_timeout));
@@ -189,6 +199,10 @@ class HostToolsClient {
 
   Future<String> diagnostics() async =>
       utf8.decode(await _exchange('diagnostics', const []));
+
+  Future<HostHardware> hardware() async => HostHardware.fromJson(
+      jsonDecode(utf8.decode(await _exchange('hardware', const [])))
+          as Map<String, dynamic>);
 
   Future<void> writeClipboard(String text) async {
     final bytes = utf8.encode(text);

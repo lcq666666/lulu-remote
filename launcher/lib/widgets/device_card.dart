@@ -10,6 +10,7 @@ enum _DeviceAction {
   transfer,
   clipboard,
   diagnostics,
+  hardware,
   edit,
   delete,
   help,
@@ -32,6 +33,7 @@ class DeviceCard extends StatefulWidget {
       this.onTransfer,
       this.onClipboard,
       this.onDiagnostics,
+      this.onHardware,
       this.onWake,
       this.waking = false,
       this.onPower,
@@ -51,6 +53,7 @@ class DeviceCard extends StatefulWidget {
   final VoidCallback? onTransfer;
   final VoidCallback? onClipboard;
   final VoidCallback? onDiagnostics;
+  final VoidCallback? onHardware;
   final VoidCallback? onWake;
   final bool waking;
   final ValueChanged<PowerAction>? onPower;
@@ -79,6 +82,8 @@ class _DeviceCardState extends State<DeviceCard> {
         widget.onPower?.call(PowerAction.signOut);
       case _DeviceAction.transfer:
         widget.onTransfer?.call();
+      case _DeviceAction.hardware:
+        widget.onHardware?.call();
       case _DeviceAction.diagnostics:
         widget.onDiagnostics?.call();
       case _DeviceAction.clipboard:
@@ -128,6 +133,13 @@ class _DeviceCardState extends State<DeviceCard> {
                         title: const Text('发送文件'),
                         onTap: () =>
                             Navigator.pop(context, _DeviceAction.transfer),
+                      ),
+                    if (widget.onHardware != null)
+                      ListTile(
+                        leading: const Icon(Icons.memory_outlined),
+                        title: const Text('硬件信息'),
+                        onTap: () =>
+                            Navigator.pop(context, _DeviceAction.hardware),
                       ),
                     if (widget.onDiagnostics != null)
                       ListTile(
@@ -239,6 +251,7 @@ class _DeviceCardState extends State<DeviceCard> {
         widget.onTransfer != null ||
         widget.onClipboard != null ||
         widget.onDiagnostics != null ||
+        widget.onHardware != null ||
         widget.onEdit != null ||
         widget.onDelete != null ||
         widget.onAndroidHelp != null;
@@ -281,6 +294,9 @@ class _DeviceCardState extends State<DeviceCard> {
                   if (widget.onTransfer != null)
                     const PopupMenuItem(
                         value: _DeviceAction.transfer, child: Text('发送文件')),
+                  if (widget.onHardware != null)
+                    const PopupMenuItem(
+                        value: _DeviceAction.hardware, child: Text('硬件信息')),
                   if (widget.onDiagnostics != null)
                     const PopupMenuItem(
                         value: _DeviceAction.diagnostics, child: Text('连接诊断')),
