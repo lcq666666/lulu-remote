@@ -170,6 +170,14 @@ void FlutterWindow::HandleTrayCall(
     const auto streaming = SunshineStreaming();
     if (streaming) result->Success(flutter::EncodableValue(*streaming));
     else result->Success();
+  } else if (method == "lockAfterStream") {
+    // Do not lock if another stream started while Dart was reading settings.
+    // The tray runner lives in the interactive user's Windows session, and
+    // can call the supported API directly (no rundll32 signature mismatch).
+    if (SunshineStreaming() == std::optional<bool>(false)) {
+      ::LockWorkStation();
+    }
+    result->Success();
   } else if (method == "pickPrivacyImage") {
     PrivacyImageFile image{};
     const auto picked = PickPrivacyImage(GetHandle(), &image);
