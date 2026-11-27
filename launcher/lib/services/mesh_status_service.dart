@@ -1,5 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+
+import 'package:xml/xml.dart';
 
 import '../models/device.dart';
 
@@ -13,10 +16,86 @@ import '../models/device.dart';
 /// NOTE: /serverinfo over plaintext HTTP on 47989 is unauthenticated
 /// by design (GameStream discovery). No secret is sent here.
 class MeshStatusService {
-  Future<HostStatus> check(Device device) async {
+  static const selfAddressMessage =
+      '这个地址是你本机，配对请求会发给自己，请填对方电脑在 LULU「让别人连接我」里显示的地址。';
+
+  Future<List<LocalAddress>> localAddresses() async {
+    final meshFuture = localMeshAddress();
+    final interfaces = await NetworkInterface.list(
+      type: InternetAddressType.IPv4,
+      includeLinkLocal: true,
+    );
+    final meshAddress = await meshFuture;
+    final addresses = <String, LocalAddress>{};
+    for (final interface in interfaces) {
+      final name = interface.name.toLowerCase();
+      for (final ip in interface.addresses) {
+        final network = switch (name) {
+          _ when name.contains('tailscale') => NetworkKind.tailscale,
+          _ when name.contains('natpierce') || name.contains('皎月') =>
+            NetworkKind.natpierce,
+          _ when name.contains('zerotier') => NetworkKind.zerotier,
+          _ => null,
+        };
+        addresses[ip.address] = LocalAddress(ip.address, network);
+      }
+    }
+    if (meshAddress != null && meshAddress.isNotEmpty) {
+      addresses[meshAddress] = LocalAddress(meshAddress, NetworkKind.tailscale);
+    }
+    return addresses.values.toList();
+  }
+
+  bool isLocalAddress(String host, Iterable<LocalAddress> local) {
+    final name = host.toLowerCase().replaceFirst(RegExp(r'\.$'), '');
+    final ip = InternetAddress.tryParse(name);
+    return name == 'localhost' ||
+        name == Platform.localHostname.toLowerCase() ||
+        ip?.isLoopback == true ||
+        local.any((entry) => entry.address == ip?.address);
+  }
+
+  static bool connectionRefused(SocketException error) =>
+      const {10061, 111, 61}.contains(error.osError?.errorCode);
+
+  Future<void> verifyLocalHost() async {
+    const timeout = Duration(seconds: 3);
     final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 3)
+      ..connectionTimeout = timeout
       ..findProxy = (_) => 'DIRECT';
+    try {
+      final request =
+          await client.getUrl(Uri.parse('http://127.0.0.1:47989/serverinfo'));
+      request.followRedirects = false;
+      final response = await request.close().timeout(timeout);
+      if (response.statusCode != HttpStatus.ok) {
+        throw StateError('本机远程服务返回 HTTP ${response.statusCode}（47989）。');
+      }
+      final body =
+          await response.transform(utf8.decoder).join().timeout(timeout);
+      final info = XmlDocument.parse(body).rootElement;
+      if (info.name.local != 'root' || info.getElement('appversion') == null) {
+        throw StateError('本机连接端口有响应，但没有返回 Sunshine 的设备信息。');
+      }
+    } on SocketException catch (error) {
+      throw StateError(connectionRefused(error)
+          ? '本机远程服务拒绝连接（47989）。请确认 Sunshine 服务已启动。'
+          : '无法访问本机远程服务（47989）。系统错误 ${error.osError?.errorCode ?? error.message}。');
+    } on TimeoutException {
+      throw StateError('本机远程服务在 3 秒内没有回应（47989）。');
+    } on FormatException {
+      throw StateError('本机连接端口返回了无法识别的设备信息（47989）。');
+    } on XmlException {
+      throw StateError('本机连接端口返回了无法识别的设备信息（47989）。');
+    } on HttpException {
+      throw StateError('本机连接端口未完成 HTTP 响应（47989）。');
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<HostStatus> check(Device device) async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 3);
     try {
       final request = await client.getUrl(
         Uri.parse('${device.nvhttpBase}/serverinfo?uniqueid=lulu-probe'),
@@ -39,54 +118,25 @@ class MeshStatusService {
     }
   }
 
-  Future<bool> isLocalAddress(String host) async {
-    final normalized = host.trim().toLowerCase();
-    final address = InternetAddress.tryParse(normalized);
-    if (normalized == 'localhost' ||
-        normalized == Platform.localHostname.toLowerCase() ||
-        address?.isLoopback == true) {
-      return true;
-    }
-    if (address == null) return false;
-    try {
-      final interfaces = await NetworkInterface.list(includeLinkLocal: true);
-      if (interfaces
-          .any((interface) => interface.addresses.contains(address))) {
-        return true;
-      }
-    } on SocketException {
-      // A Tailscale address can still be verified through its CLI on Windows.
-    }
-    return address.address == await localMeshAddress();
-  }
-
-  Future<bool?> isTailscaleConnected() async {
+  Future<bool?> tailscaleConnected() async {
     if (!Platform.isWindows) return null;
     try {
-      final result = await Process.run(
-        _tailscaleCommand(),
-        ['status', '--json'],
-      ).timeout(const Duration(seconds: 4));
-      final detail = jsonDecode(result.stdout as String);
-      final state = detail is Map ? detail['BackendState'] : null;
+      final status =
+          await Process.run(_tailscaleCommand(), ['status', '--json'])
+              .timeout(const Duration(seconds: 4));
+      final json = jsonDecode(status.stdout as String);
+      final state = json is Map ? json['BackendState'] : null;
       return state is String ? state == 'Running' : null;
     } on Exception {
       return null;
     }
   }
 
-  /// Checks whether the Tailscale tunnel answers independently of the app port.
-  Future<bool> answersTailscalePing(String address) async {
-    if (!Platform.isWindows) return false;
-    try {
-      final result = await Process.run(
-        _tailscaleCommand(),
-        ['ping', '--c', '1', '--timeout', '2s', address],
-      ).timeout(const Duration(seconds: 4));
-      return result.exitCode == 0;
-    } on Exception {
-      return false;
-    }
+  String _tailscaleCommand() {
+    final installed = File(
+      '${Platform.environment['ProgramFiles']}\\Tailscale\\tailscale.exe',
+    );
+    return installed.existsSync() ? installed.path : 'tailscale';
   }
 
   /// Best-effort local mesh address (Windows: `tailscale ip`, else null).
@@ -106,13 +156,15 @@ class MeshStatusService {
     }
     return null;
   }
+}
 
-  String _tailscaleCommand() {
-    final installed = File(
-      '${Platform.environment['ProgramFiles']}\\Tailscale\\tailscale.exe',
-    );
-    return installed.existsSync() ? installed.path : 'tailscale';
-  }
+class LocalAddress {
+  const LocalAddress(this.address, this.network);
+
+  final String address;
+  final NetworkKind? network;
+
+  String get label => network?.label ?? '局域网';
 }
 
 enum HostStatus { online, offline, unreachable }

@@ -2,6 +2,8 @@
 #include <flutter/flutter_view_controller.h>
 #include <windows.h>
 
+#include <algorithm>
+
 #include "flutter_window.h"
 #include "utils.h"
 
@@ -22,12 +24,22 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   std::vector<std::string> command_line_arguments =
       GetCommandLineArguments();
 
+  const bool start_in_tray = std::find(command_line_arguments.begin(),
+      command_line_arguments.end(), "--tray") != command_line_arguments.end();
+  HANDLE instance_mutex = ::CreateMutexW(nullptr, FALSE, L"Local\\LULU.Remote.Window");
+  if (instance_mutex && ::GetLastError() == ERROR_ALREADY_EXISTS) {
+    const HWND running = ::FindWindowW(nullptr, L"LULU Remote");
+    if (running && !start_in_tray) ::PostMessageW(running, WM_APP + 2, 0, 0);
+    ::CloseHandle(instance_mutex);
+    ::CoUninitialize();
+    return EXIT_SUCCESS;
+  }
   project.set_dart_entrypoint_arguments(std::move(command_line_arguments));
 
-  FlutterWindow window(project);
+  FlutterWindow window(project, start_in_tray);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
-  if (!window.Create(L"lulu_remote", origin, size)) {
+  if (!window.Create(L"LULU Remote", origin, size)) {
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);
@@ -38,6 +50,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     ::DispatchMessage(&msg);
   }
 
+  if (instance_mutex) ::CloseHandle(instance_mutex);
   ::CoUninitialize();
   return EXIT_SUCCESS;
 }

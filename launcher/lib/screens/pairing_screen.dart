@@ -2,17 +2,27 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../app.dart';
 import '../models/device.dart';
 import '../pairing/pairing_errors.dart';
 import '../pairing/pairing_service.dart';
+import '../pairing/sunshine_pin_api.dart';
 import '../services/component_installer.dart';
 import '../services/mesh_status_service.dart';
 import '../services/moonlight_launcher.dart';
 import '../services/secure_store.dart';
 import '../widgets/pin_display.dart';
 
+/// In-app pairing screen. The whole point: the user never opens Moonlight.
+///
+/// 1. Enter the Sunshine admin username/password for this attempt.
+/// 2. Tap 开始配对. LULU generates a 4-digit PIN, shows it here, starts
+///    the phase-1 /pair request, and submits the PIN to Sunshine itself.
+/// 3. Wait for phases 2–5. On success the device comes back paired with
+///    its AppId + host UUID resolved, and the home screen can connect.
 class PairingScreen extends StatefulWidget {
   const PairingScreen({super.key, required this.device});
   final Device device;
@@ -30,8 +40,12 @@ class _PairingScreenState extends State<PairingScreen> {
   String? _pin;
   String? _error;
   bool _running = false;
-  bool _automatic = false;
   PairingPhase? _phase;
+  String? _requestName;
+  String? _pinStatus;
+  Timer? _waitTimer;
+  final _waiting = Stopwatch();
+  bool _checkingRequest = false;
 
   @override
   void initState() {
@@ -48,6 +62,7 @@ class _PairingScreenState extends State<PairingScreen> {
 
   @override
   void dispose() {
+    _waitTimer?.cancel();
     _userController.dispose();
     _passwordController.dispose();
     super.dispose();
@@ -56,7 +71,7 @@ class _PairingScreenState extends State<PairingScreen> {
   Future<void> _start() async {
     final user = _userController.text.trim();
     final password = _passwordController.text;
-    if (_automatic && (user.isEmpty || password.isEmpty)) {
+    if (user.isEmpty || password.isEmpty) {
       setState(() {
         _phase = null;
         _error = '请输入对方电脑的远程管理账号和密码。';
@@ -67,6 +82,8 @@ class _PairingScreenState extends State<PairingScreen> {
       _running = true;
       _error = null;
       _pin = null;
+      _requestName = null;
+      _pinStatus = null;
     });
 
     try {
@@ -97,8 +114,8 @@ class _PairingScreenState extends State<PairingScreen> {
       final service = PairingService(secureStore: _secureStore);
       final result = await service.pair(
         device: widget.device,
-        adminUser: _automatic ? user : null,
-        adminPassword: _automatic ? password : null,
+        adminUser: user,
+        adminPassword: password,
         onProgress: _showProgress,
       );
       if (!mounted) return;
@@ -123,11 +140,7 @@ class _PairingScreenState extends State<PairingScreen> {
     } on HttpException catch (error) {
       _fail(error.message);
     } on TimeoutException {
-      _fail(
-        _phase == PairingPhase.challenging || _phase == PairingPhase.verifying
-            ? '对方已收到配对码，但后续配对验证超时。请重试。'
-            : '等待对方响应超时。请确认地址、跨网网络和对方远程服务，再重试当前步骤。',
-      );
+      _fail('等待对方响应超时。请确认被控电脑在线，再重试当前步骤。');
     } on SocketException {
       _fail('连接中断。请确认两台电脑的网络仍然连接，再重试。');
     } catch (_) {
@@ -137,14 +150,28 @@ class _PairingScreenState extends State<PairingScreen> {
 
   void _showProgress(PairingProgress progress) {
     if (!mounted) return;
+    if (progress.pin != null && !_waiting.isRunning) {
+      _waiting
+        ..reset()
+        ..start();
+      _waitTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (mounted) setState(() {});
+      });
+    } else if (progress.pin == null) {
+      _waitTimer?.cancel();
+      _waiting.stop();
+    }
     setState(() {
       _phase = progress.phase;
       _message = progress.message;
       _pin = progress.pin;
+      _requestName = progress.requestName;
     });
   }
 
   void _fail(String message) {
+    _waitTimer?.cancel();
+    _waiting.stop();
     if (!mounted) return;
     setState(() {
       _running = false;
@@ -154,50 +181,84 @@ class _PairingScreenState extends State<PairingScreen> {
 
   Future<void> _checkNetwork() async {
     final device = widget.device;
-    final address = InternetAddress.tryParse(device.meshAddress);
     final mesh = MeshStatusService();
-    if (await mesh.isLocalAddress(device.meshAddress)) {
-      throw const PairingTransport(
-        '这个地址属于你正在使用的电脑。请在被控电脑打开 LULU「让别人连接我」，复制它显示的地址。',
-      );
+    final local = await mesh.localAddresses();
+    if (mesh.isLocalAddress(device.meshAddress, local)) {
+      throw const PairingTransport(MeshStatusService.selfAddressMessage);
     }
-    final octets = address?.rawAddress;
-    final tailscaleAddress = octets != null &&
-        octets.length == 4 &&
-        octets[0] == 100 &&
-        octets[1] >= 64 &&
-        octets[1] <= 127;
+    final target = '${device.meshAddress}:${device.sunshinePort}';
+    final kind = NetworkKind.detect(device.meshAddress);
+    Future<bool> missingNetwork() async {
+      if (!Platform.isWindows || kind == null) return false;
+      if (kind == NetworkKind.tailscale) {
+        final connected = await mesh.tailscaleConnected();
+        if (connected != null) return !connected;
+      }
+      return !local.any((ip) => ip.network == kind);
+    }
+
+    final timeoutMessage = '连接 $target 超时。请确认两台电脑在同一网络，并检查对方防火墙是否放行远程连接。';
+    final missingMessage = '本机还没接入 ${kind?.label}。请先连接与对方相同的网络。';
     try {
       final socket = await Socket.connect(
-        device.meshAddress,
-        device.sunshinePort,
-        timeout: const Duration(seconds: 5),
-      );
+          device.meshAddress, device.sunshinePort,
+          timeout: const Duration(seconds: 5));
       socket.destroy();
-    } on SocketException {
-      final target = '${device.meshAddress}:${device.sunshinePort}';
-      if (tailscaleAddress && Platform.isWindows) {
-        final connected = await mesh.isTailscaleConnected();
-        if (connected == false ||
-            (connected == null && await mesh.localMeshAddress() == null)) {
-          throw const PairingTransport('本机还没连接跨网网络。请先打开 Tailscale，再重试。');
-        }
-        if (await mesh.answersTailscalePing(device.meshAddress)) {
-          throw PairingTransport(
-            '已通过 Tailscale 找到对方电脑，但远程连接入口 $target 无法访问。'
-            '请在被控电脑打开 LULU「让别人连接我」，确认服务已就绪后再试。',
-          );
-        }
+    } on SocketException catch (error) {
+      if (MeshStatusService.connectionRefused(error)) {
+        throw PairingTransport(
+            '对方拒绝 TCP 连接（$target）。请在被控电脑开启远程服务（Sunshine）并核对端口。');
       }
-      throw PairingTransport(tailscaleAddress
-          ? '连不上 $target。请确认两台电脑登录同一个 Tailscale 网络，地址填的是被控电脑的跨网地址，且对方已开启远程控制。'
-          : '连不上 $target。请核对被控电脑的地址，确认两台电脑能互通，且对方已开启远程控制。');
+      if (await missingNetwork()) throw PairingTransport(missingMessage);
+      final code = error.osError?.errorCode;
+      if (const {60, 110, 10060}.contains(code) ||
+          (code == null && error.message.toLowerCase().contains('timed out'))) {
+        throw PairingTransport(timeoutMessage);
+      }
+      throw PairingTransport(
+          '无法连接 $target。请核对对方地址和网络连接（系统错误 ${code ?? '未知'}）。');
+    } on TimeoutException {
+      throw PairingTransport(
+          await missingNetwork() ? missingMessage : timeoutMessage);
+    }
+  }
+
+  Future<void> _checkPendingRequest() async {
+    final name = _requestName;
+    if (name == null) return;
+    setState(() => _checkingRequest = true);
+    try {
+      final requests = await SunshinePinApi().listPairings(
+          widget.device, _userController.text.trim(), _passwordController.text);
+      if (!mounted || _requestName != name) return;
+      setState(() => _pinStatus =
+          requests.any((request) => request.name == name)
+              ? '对方仍有待确认的请求。'
+              : '待确认列表里已没有这条请求，请看下方连接进度。');
+    } on Exception {
+      if (mounted && _requestName == name) {
+        setState(() => _pinStatus = '无法查询对方的待确认请求。');
+      }
+    } finally {
+      if (mounted) setState(() => _checkingRequest = false);
+    }
+  }
+
+  Future<void> _openPairingPage() async {
+    try {
+      if (await launchUrl(Uri.parse(widget.device.webBase),
+          mode: LaunchMode.externalApplication)) return;
+    } on Exception {
+      // Show the address if the browser cannot be opened.
+    }
+    if (mounted) {
+      setState(() => _pinStatus = '无法打开浏览器。请打开 ${widget.device.webBase}。');
     }
   }
 
   static const _steps = {
     PairingPhase.checkingClient: '本机连接组件',
-    PairingPhase.checkingNetwork: '能否连到对方电脑',
+    PairingPhase.checkingNetwork: '网络与对方地址',
     PairingPhase.checkingHost: '对方远程服务（Sunshine）',
     PairingPhase.checkingAccount: '对方管理账号与访问权限',
     PairingPhase.starting: '准备本机配对身份',
@@ -219,50 +280,61 @@ class _PairingScreenState extends State<PairingScreen> {
           child: ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              if (!_automatic) const Text('在被控电脑上打开「让别人连接我」，点「等待连接请求」。'),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('使用对方管理账号自动配对'),
-                value: _automatic,
-                onChanged: _running
-                    ? null
-                    : (value) => setState(() {
-                          _automatic = value;
-                          _phase = null;
-                          _error = null;
-                        }),
+              const Text(
+                '请在对方的同意下，使用那台电脑的远程管理账号完成首次授权。',
+                style: TextStyle(color: LuluTheme.muted),
               ),
-              if (_automatic) ...[
-                TextField(
-                  controller: _userController,
-                  enabled: !_running,
-                  decoration: const InputDecoration(
-                    labelText: '对方电脑的管理账号',
-                  ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _userController,
+                enabled: !_running,
+                decoration: const InputDecoration(
+                  labelText: '对方电脑的管理账号',
                 ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _passwordController,
-                  enabled: !_running,
-                  obscureText: true,
-                  decoration: const InputDecoration(
-                    labelText: '对方电脑的管理密码',
-                  ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _passwordController,
+                enabled: !_running,
+                obscureText: true,
+                decoration: const InputDecoration(
+                  labelText: '对方电脑的管理密码',
                 ),
-              ],
+              ),
               const SizedBox(height: 16),
               ElevatedButton(
                 onPressed: _running ? null : _start,
-                child: Text(_running ? '正在配对…' : '发起配对'),
+                child: Text(_running ? '正在验证…' : '确认授权'),
               ),
               if (_running && _pin != null) ...[
                 const SizedBox(height: 16),
                 PinDisplay(
                   pin: _pin!,
-                  subtitle: _automatic
-                      ? 'LULU 会自动提交此 PIN。'
-                      : '请在被控电脑的「有设备请求连接」弹窗里输入此码。',
+                  subtitle: 'LULU 会自动提交。需要手动确认时，请在对方电脑输入上方的 4 位 PIN。',
                 ),
+                Text(
+                    '正在等待对方确认。请在对方电脑上打开 Sunshine 配对页（${widget.device.webBase} → 点 PIN），输入上方显示的 4 位 PIN；如果对方电脑装了 LULU 伴侣，会直接弹出输入框。'),
+                Text('已等待 ${_waiting.elapsed.inSeconds} 秒'),
+                Wrap(spacing: 8, children: [
+                  TextButton(
+                    onPressed: () async {
+                      final pin = _pin;
+                      if (pin == null) return;
+                      await Clipboard.setData(ClipboardData(text: pin));
+                      if (mounted && _pin == pin) {
+                        setState(() => _pinStatus = '已复制 PIN。');
+                      }
+                    },
+                    child: const Text('复制 PIN'),
+                  ),
+                  TextButton(
+                      onPressed: _openPairingPage,
+                      child: const Text('打开对方配对页')),
+                  TextButton(
+                      onPressed: _checkingRequest ? null : _checkPendingRequest,
+                      child: const Text('我已在对方电脑输入')),
+                ]),
+                if (_pinStatus != null) Text(_pinStatus!),
               ],
               const SizedBox(height: 20),
               Text('连接进度', style: Theme.of(context).textTheme.titleMedium),
@@ -286,12 +358,7 @@ class _PairingScreenState extends State<PairingScreen> {
                   ),
                 ),
               const SizedBox(height: 4),
-              for (final (index, step) in _steps.entries
-                  .where((entry) =>
-                      _automatic ||
-                      (entry.key != PairingPhase.checkingAccount &&
-                          entry.key != PairingPhase.submittingPin))
-                  .indexed)
+              for (final (index, step) in _steps.entries.indexed)
                 _buildStep(index, step),
             ],
           ),

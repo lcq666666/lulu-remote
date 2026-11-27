@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -6,9 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../services/component_installer.dart';
-import '../services/host_setup_service.dart';
+import '../services/host_tray.dart';
 import '../services/mesh_status_service.dart';
-import '../widgets/incoming_pairing.dart';
 import 'setup_checklist_screen.dart';
 
 class ThisComputerScreen extends StatefulWidget {
@@ -22,12 +20,11 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
   static const _runKey = r'HKCU\Software\Microsoft\Windows\CurrentVersion\Run';
   static const _runName = 'LULU Remote';
   final _network = MeshStatusService();
-  final _hostSetup = HostSetupService();
-  WindowsHostState? _hostState;
-  bool get _available => _hostState == WindowsHostState.ready;
+  bool _available = false;
   bool _autoStart = false;
+  bool _installedStartup = false;
   bool _busy = true;
-  List<({String label, String address})> _addresses = [];
+  List<LocalAddress> _addresses = [];
   String? _message;
 
   @override
@@ -36,44 +33,30 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
     _perform(_refresh);
   }
 
-  Future<void> _refresh() async {
-    final meshAddress = await _network.localMeshAddress();
-    final adapters = await Process.run(
-        'powershell.exe',
-        [
-          '-NoProfile',
-          '-NonInteractive',
-          '-Command',
-          '[Console]::OutputEncoding = [Text.Encoding]::UTF8; '
-              "Get-NetAdapter -Physical | Where-Object Status -eq 'Up' | "
-              'ForEach-Object { Get-NetIPAddress -InterfaceIndex \$_.ifIndex '
-              '-AddressFamily IPv4 -AddressState Preferred -ErrorAction SilentlyContinue } | '
-              "Where-Object { \$_.IPAddress -notlike '169.254.*' } | "
-              'Select-Object IPAddress,InterfaceAlias | ConvertTo-Json -Compress',
-        ],
-        stdoutEncoding: const Utf8Codec(allowMalformed: true));
-    final addresses = <({String label, String address})>[];
-    final output = (adapters.stdout as String).trim();
-    if (adapters.exitCode == 0 && output.isNotEmpty) {
-      final decoded = jsonDecode(output);
-      for (final entry in decoded is List ? decoded : [decoded]) {
-        addresses.add((
-          label: '局域网地址 · ${entry['InterfaceAlias']}',
-          address: entry['IPAddress'] as String,
-        ));
-      }
+  Future<void> _refresh({bool reportHostFailure = false}) async {
+    final addresses = await _network.localAddresses();
+    String? hostFailure;
+    try {
+      await _network.verifyLocalHost();
+    } on StateError catch (error) {
+      hostFailure = error.message;
     }
-    final hostState = await _hostSetup.windowsHostState();
     final startup =
         await Process.run('reg.exe', ['query', _runKey, '/v', _runName]);
+    final installedStartup = await Process.run('reg.exe', [
+      'query',
+      r'HKLM\Software\Microsoft\Windows\CurrentVersion\Run',
+      '/v',
+      'LULU Remote Host',
+      '/reg:64',
+    ]);
     if (!mounted) return;
     setState(() {
-      _hostState = hostState;
+      _installedStartup = installedStartup.exitCode == 0;
+      _available = hostFailure == null;
+      if (reportHostFailure) _message = hostFailure;
       _autoStart = startup.exitCode == 0;
-      _addresses = [
-        ...addresses,
-        if (meshAddress != null) (label: '跨网地址', address: meshAddress),
-      ];
+      _addresses = addresses;
     });
   }
 
@@ -104,7 +87,7 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
         '/t',
         'REG_SZ',
         '/d',
-        '"${Platform.resolvedExecutable}"'
+        '"${Platform.resolvedExecutable}" --tray'
       ],
       '/f',
     ]);
@@ -114,7 +97,7 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
 
   Future<void> _enableHost() async {
     await ComponentInstaller().prepareWindowsHost();
-    await _refresh();
+    await _refresh(reportHostFailure: true);
   }
 
   @override
@@ -125,7 +108,7 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
         actions: [
           IconButton(
             tooltip: '刷新状态',
-            onPressed: _busy ? null : () => _perform(_refresh),
+            onPressed: _busy ? null : () => _perform(() => _refresh()),
             icon: const Icon(Icons.refresh),
           ),
         ],
@@ -139,15 +122,14 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
               Text(Platform.localHostname,
                   style: Theme.of(context).textTheme.headlineSmall),
               const SizedBox(height: 8),
-              Text(_hostState?.message ?? '正在检查远程服务…'),
+              Text(_available ? '远程服务已开启' : '远程服务未开启'),
               if (_busy) const LinearProgressIndicator(),
               if (_message != null) ...[
                 const SizedBox(height: 8),
                 Text(_message!),
               ],
               const SizedBox(height: 16),
-              if (_hostState == WindowsHostState.stopped ||
-                  _hostState == WindowsHostState.unknown)
+              if (!_available)
                 Align(
                   alignment: Alignment.centerLeft,
                   child: ElevatedButton.icon(
@@ -158,14 +140,21 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
                 ),
               const SizedBox(height: 24),
               if (_available) ...[
-                IncomingPairing(checkHost: _hostSetup.windowsHostState),
-                const SizedBox(height: 24),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: OutlinedButton.icon(
+                    onPressed: _busy ? null : HostTray.instance.register,
+                    icon: const Icon(Icons.notifications_outlined),
+                    label: const Text('设置配对提醒'),
+                  ),
+                ),
+                const SizedBox(height: 16),
               ],
               Text('这台电脑的地址', style: Theme.of(context).textTheme.titleMedium),
               if (_addresses.isNotEmpty)
                 const Padding(
                   padding: EdgeInsets.only(top: 6),
-                  child: Text('同一网络选局域网地址，已加入同一跨网网络时选跨网地址。'),
+                  child: Text('同一局域网用局域网地址。跨网连接请选择两台电脑都已接入的网络。'),
                 ),
               if (_addresses.isEmpty && !_busy)
                 const ListTile(title: Text('未找到地址，请检查本机网络。')),
@@ -215,9 +204,11 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
                     title: const Text('开机启动 LULU'),
-                    subtitle: const Text('登录 Windows 后自动打开'),
-                    value: _autoStart,
-                    onChanged: _busy
+                    subtitle: Text(_installedStartup
+                        ? '主机安装器已开启托盘启动'
+                        : '登录 Windows 后在托盘等待配对'),
+                    value: _autoStart || _installedStartup,
+                    onChanged: _busy || _installedStartup
                         ? null
                         : (value) => _perform(() => _setAutoStart(value)),
                   ),

@@ -8,10 +8,9 @@
 // CRITICAL ORDER (read the README before changing it):
 //   1. GET /serverinfo (plaintext) — appversion + HttpsPort + host UUID.
 //   2. Start phase 1 (/pair?phrase=getservercert) in the background.
-//      Sunshine holds the response until a PIN is submitted.
-//   3. The host operator or automatic client submits the PIN.
-//   4. Phase 1 returns plaincert; run phases 2–4, which can unblock
-//      the PIN response, then run phase 5
+//      Sunshine PARKS this response until a PIN is submitted — no timeout.
+//   3. Submit the PIN via POST /api/pin (Sunshine admin credentials).
+//   4. Phase 1 returns plaincert; run phases 2–4; then phase 5
 //      (pairchallenge) over mutual TLS. If phase 5 fails, discard the
 //      pairing — the cert may not have entered the host's trust set yet.
 
@@ -46,10 +45,11 @@ enum PairingPhase {
 }
 
 class PairingProgress {
-  const PairingProgress(this.phase, this.message, {this.pin});
+  const PairingProgress(this.phase, this.message, {this.pin, this.requestName});
   final PairingPhase phase;
   final String message;
   final String? pin;
+  final String? requestName;
 }
 
 class PairingResult {
@@ -73,19 +73,20 @@ class PairingService {
 
   /// Pair [device] and return the updated device + pinned server cert.
   ///
-  /// Without management credentials, the host operator enters the PIN
-  /// displayed through [onProgress]. With credentials, LULU submits it.
+  /// The 4-digit PIN is generated here, handed to the UI via [onProgress]
+  /// (so LULU displays it), and submitted to Sunshine by this service —
+  /// the user never opens Moonlight. [adminUser]/[adminPassword] are the
+  /// Sunshine web UI credentials used for this attempt.
   Future<PairingResult> pair({
     required Device device,
-    String? adminUser,
-    String? adminPassword,
+    required String adminUser,
+    required String adminPassword,
     void Function(PairingProgress progress)? onProgress,
   }) async {
-    if ((adminUser == null) != (adminPassword == null)) {
-      throw ArgumentError('Both management credentials are required for automatic pairing.');
-    }
-    void emit(PairingPhase phase, String message, {String? pin}) =>
-        onProgress?.call(PairingProgress(phase, message, pin: pin));
+    void emit(PairingPhase phase, String message,
+            {String? pin, String? requestName}) =>
+        onProgress?.call(PairingProgress(phase, message,
+            pin: pin, requestName: requestName));
 
     final plainClient = HttpClient()..findProxy = (_) => 'DIRECT';
     try {
@@ -98,25 +99,25 @@ class PairingService {
       );
       if (_xmlText(serverInfo, 'HttpsPort') == null &&
           _xmlText(serverInfo, 'appversion') == null) {
-        throw const PairingTransport('这个地址未返回 Sunshine 的设备信息。请核对对方电脑的地址和远程连接端口。');
+        throw const PairingTransport(
+            '这个地址未返回 Sunshine 的设备信息。请核对对方电脑的地址和远程连接端口。');
       }
       final httpsPort = int.tryParse(_xmlText(serverInfo, 'HttpsPort') ?? '') ??
           (device.sunshinePort - 5);
-      final hostUuid = _xmlText(serverInfo, 'uuid') ??
-          _xmlText(serverInfo, 'uniqueid');
+      final hostUuid =
+          _xmlText(serverInfo, 'uuid') ?? _xmlText(serverInfo, 'uniqueid');
 
-      if (adminUser != null && adminPassword != null) {
-        emit(PairingPhase.checkingAccount, '正在验证对方电脑的管理账号和访问权限。');
-        await _pinApi.verifyAccount(
-          device: device,
-          adminUser: adminUser,
-          adminPassword: adminPassword,
-        );
-      }
+      emit(PairingPhase.checkingAccount, '正在验证对方电脑的管理账号和访问权限。');
+      await _pinApi.verifyAccount(
+        device: device,
+        adminUser: adminUser,
+        adminPassword: adminPassword,
+      );
 
       emit(PairingPhase.starting, '正在准备本机的配对身份。');
       final identity = await ClientIdentity.loadOrGenerate(_secureStore);
       final uuid = hexEncode(randomBytes(16));
+      final requestName = '${Platform.localHostname} · LULU-$uuid';
       final pin = Random.secure().nextInt(10000).toString().padLeft(4, '0');
       final salt = randomBytes(16);
       final aesKey = deriveAesKey(salt, pin);
@@ -128,7 +129,7 @@ class PairingService {
         device: device,
         uniqueId: identity.uniqueId,
         uuid: uuid,
-        requestName: adminUser == null ? Platform.localHostname : 'LULU-$uuid',
+        requestName: requestName,
         query: {
           'phrase': 'getservercert',
           'salt': hexEncode(salt),
@@ -136,11 +137,8 @@ class PairingService {
         },
         timeout: null, // Sunshine parks this until the PIN arrives.
       );
-      emit(
-        PairingPhase.waitingForPin,
-        adminUser == null ? '正在等待对方在 LULU 中确认。' : '正在等待对方登记本次配对请求。',
-        pin: adminUser == null ? pin : null,
-      );
+      emit(PairingPhase.waitingForPin, '正在等待对方确认。',
+          pin: pin, requestName: requestName);
 
       // --- Step 2: submit the PIN to Sunshine's web API ---
       // Phase 1 can reject the request before the host exposes a PIN entry.
@@ -158,34 +156,41 @@ class PairingService {
           rememberFailure(error, stack);
         }
       }, onError: rememberFailure));
-      final pinSubmission = adminUser == null || adminPassword == null
-          ? null
-          : _pinApi.submitPin(
+      var awaitingPin = true;
+      final pinSubmission = _pinApi
+          .submitPin(
         device: device,
         pin: pin,
         adminUser: adminUser,
         adminPassword: adminPassword,
-        requestName: 'LULU-$uuid',
+        requestName: requestName,
         checkPendingRequest: () {
           final error = requestError;
           if (error != null) Error.throwWithStackTrace(error, requestStack!);
         },
         onRequestFound: () => emit(
-          PairingPhase.submittingPin, '对方已登记请求，正在提交四位配对码。', pin: pin,
-        ),
-      );
+            PairingPhase.submittingPin, '对方已登记请求，正在自动提交四位配对码。',
+            pin: pin, requestName: requestName),
+      )
+          .onError<HttpException>((error, stack) async {
+        if (requestError != null) Error.throwWithStackTrace(error, stack);
+        final pending =
+            await _pinApi.listPairings(device, adminUser, adminPassword);
+        if (!pending.any((request) => request.name == requestName)) {
+          Error.throwWithStackTrace(error, stack);
+        }
+        if (!awaitingPin) return;
+        emit(PairingPhase.waitingForPin, '自动确认未完成，可以在对方电脑上输入 PIN。',
+            pin: pin, requestName: requestName);
+      });
 
-      // Sunshine sends its certificate as soon as it receives the PIN, but
-      // recent versions wait for phase 4 before replying to the PIN request.
+      // The host can wait for phase 4 before responding to the PIN POST.
       final phase1Doc = await Future.any([
         phase1,
-        if (pinSubmission != null) pinSubmission.then((_) => phase1),
-      ]).timeout(
-        Duration(seconds: pinSubmission == null ? 90 : 50),
-        onTimeout: () => throw PairingTransport(pinSubmission == null
-            ? '本次请求未完成。请让对方在「让别人连接我」确认，再发起新请求。'
-            : '对方未返回配对证书，请重新发起配对。'),
-      );
+        pinSubmission.then((_) => phase1),
+      ]).timeout(const Duration(seconds: 90),
+          onTimeout: () => throw const PairingTransport('等待对方确认超时，请重新发起配对。'));
+      awaitingPin = false;
       _requirePaired(phase1Doc, phase: 1);
       final plainCertHex = _xmlText(phase1Doc, 'plaincert');
       if (plainCertHex == null || plainCertHex.isEmpty) {
@@ -279,7 +284,6 @@ class PairingService {
       if (_xmlText(phase4Doc, 'paired') != '1') {
         throw const PairingRefused();
       }
-      if (pinSubmission != null) await pinSubmission;
 
       // --- Phase 5: pairchallenge over mutual TLS ---
       emit(PairingPhase.confirmingTls, '正在确认对方已经授权这台设备。');
@@ -293,7 +297,7 @@ class PairingService {
 
       // Persist the pinned server cert, then resolve the applist.
       emit(PairingPhase.saving, '正在保存配对信息并读取可连接的应用。');
-      if (adminUser != null) await _secureStore.writeSunshineUser(device.id, adminUser);
+      await _secureStore.writeSunshineUser(device.id, adminUser);
       await _secureStore.writeServerCertHex(
         device.id,
         hexEncode(serverCertDer),
@@ -334,8 +338,8 @@ class PairingService {
       'updateState': '1',
       ...query,
     };
-    final uri = Uri.parse('${device.nvhttpBase}/pair')
-        .replace(queryParameters: params);
+    final uri =
+        Uri.parse('${device.nvhttpBase}/pair').replace(queryParameters: params);
     return _getXml(client, uri, timeout: timeout);
   }
 
@@ -480,8 +484,8 @@ class PairingService {
     context.usePrivateKeyBytes(utf8.encode(identity.keyPem));
     final client = HttpClient(context: context)..findProxy = (_) => 'DIRECT';
     final expected = sha256(serverCertDer);
-    client.badCertificateCallback = (cert, _, __) =>
-        _bytesEqual(sha256(cert.der), expected);
+    client.badCertificateCallback =
+        (cert, _, __) => _bytesEqual(sha256(cert.der), expected);
     return client;
   }
 }

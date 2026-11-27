@@ -1,10 +1,7 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:url_launcher/url_launcher.dart';
-import 'package:xml/xml.dart';
 
-import '../models/device.dart';
 import 'moonlight_launcher.dart';
 
 /// Setup checklist: is everything the launcher needs actually installed?
@@ -19,101 +16,6 @@ class HostSetupService {
       : _launcher = launcher ?? MoonlightLauncher();
 
   final MoonlightLauncher _launcher;
-
-  Future<WindowsHostState> windowsHostState() async {
-    final state = await _queryWindowsHostState();
-    if (state == WindowsHostState.ready || state == WindowsHostState.unknown) {
-      // A failed Windows status query must not hide a responding Sunshine host.
-      if (await _localPairingEndpointsRespond()) return WindowsHostState.ready;
-      if (state == WindowsHostState.ready) return WindowsHostState.starting;
-    }
-    return state;
-  }
-
-  /// The listeners should belong to the installed Windows service.
-  Future<WindowsHostState> _queryWindowsHostState() async {
-    try {
-      final result = await Process.run('powershell.exe', [
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        _hostStateCommand,
-      ]).timeout(const Duration(seconds: 8));
-      if (result.exitCode != 0) return WindowsHostState.unknown;
-      final output = (result.stdout as String).trim();
-      return WindowsHostState.values.firstWhere(
-        (state) => state.name == output,
-        orElse: () => WindowsHostState.unknown,
-      );
-    } on Exception {
-      return WindowsHostState.unknown;
-    }
-  }
-
-  Future<bool> _localPairingEndpointsRespond() async {
-    final host = Device(id: 'local', name: '本机', meshAddress: '127.0.0.1');
-    const timeout = Duration(seconds: 3);
-    final client = HttpClient()
-      ..connectionTimeout = timeout
-      // Sunshine uses a self-signed certificate. This loopback probe sends no credentials.
-      ..badCertificateCallback =
-          ((certificate, address, port) => address == '127.0.0.1')
-      ..findProxy = (_) => 'DIRECT';
-    try {
-      final request = await client.getUrl(
-        Uri.parse('${host.nvhttpBase}/serverinfo?uniqueid=lulu-probe'),
-      );
-      request.followRedirects = false;
-      final discovery = await request.close().timeout(timeout);
-      if (discovery.statusCode != HttpStatus.ok) return false;
-      final xml = XmlDocument.parse(
-        await discovery.transform(utf8.decoder).join().timeout(timeout),
-      ).rootElement;
-      if (xml.name.local != 'root' ||
-          xml.getElement('appversion') == null ||
-          xml.getElement('HttpsPort') == null) {
-        return false;
-      }
-
-      final management = await client.getUrl(Uri.parse('${host.webBase}/'));
-      management.followRedirects = false;
-      final response = await management.close().timeout(timeout);
-      final challenge =
-          response.headers.value(HttpHeaders.wwwAuthenticateHeader);
-      final redirect = response.headers.value(HttpHeaders.locationHeader);
-      return (response.statusCode == HttpStatus.unauthorized &&
-              challenge?.contains('Sunshine Gamestream Host') == true) ||
-          (response.isRedirect && redirect == '/welcome');
-    } on Exception {
-      return false;
-    } finally {
-      client.close(force: true);
-    }
-  }
-
-  static const _hostStateCommand = r'''
-$ErrorActionPreference = 'Stop'
-$service = Get-CimInstance Win32_Service -Filter "Name='SunshineService'"
-$ports = @(47989, 47990)
-$listeners = @(Get-NetTCPConnection -State Listen | Where-Object {
-  $_.LocalPort -in $ports
-})
-$ownedProcessIds = @()
-if ($service.State -eq 'Running') {
-  $ownedProcessIds = @($service.ProcessId)
-  $workers = Get-CimInstance Win32_Process -Filter "ParentProcessId=$($service.ProcessId)"
-  $ownedProcessIds += @($workers | ForEach-Object { $_.ProcessId })
-}
-if ($listeners | Where-Object { $_.OwningProcess -notin $ownedProcessIds }) {
-  'portInUse'
-} elseif ($service.State -ne 'Running') {
-  'stopped'
-} elseif (@($listeners.LocalPort | Sort-Object -Unique).Count -ne $ports.Count) {
-  'starting'
-} else {
-  'ready'
-}
-''';
 
   Future<List<SetupCheck>> runChecks() async {
     final checks = <SetupCheck>[];
@@ -201,18 +103,6 @@ if ($listeners | Where-Object { $_.OwningProcess -notin $ownedProcessIds }) {
       throw StateError('无法打开 ${check.title} 的下载页面。');
     }
   }
-}
-
-enum WindowsHostState {
-  ready('远程服务已就绪'),
-  stopped('远程服务未开启'),
-  portInUse('连接入口正被其他程序占用。请关闭占用它的远程软件，再点右上角刷新。'),
-  starting('远程服务已启动，连接入口还没就绪。请稍候再刷新。'),
-  unknown('暂时无法确认远程服务状态。可点下方按钮尝试开启。');
-
-  const WindowsHostState(this.message);
-
-  final String message;
 }
 
 class SetupCheck {

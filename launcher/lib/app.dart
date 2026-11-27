@@ -78,12 +78,15 @@ class LuluTheme {
 }
 
 class LuluApp extends StatelessWidget {
-  const LuluApp({super.key});
+  const LuluApp({super.key, this.navigatorKey});
+
+  final GlobalKey<NavigatorState>? navigatorKey;
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'LULU 远程',
+      navigatorKey: navigatorKey,
       theme: LuluTheme.theme,
       debugShowCheckedModeBanner: false,
       home: const HomeScreen(),

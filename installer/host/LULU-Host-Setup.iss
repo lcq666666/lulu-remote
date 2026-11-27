@@ -43,6 +43,8 @@ Name: "en"; MessagesFile: "compiler:Default.isl"
 Name: "chs"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 
 [Files]
+Source: "..\..\launcher\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\scripts\prepare-host.ps1"; DestDir: "{app}\vendor"; Flags: ignoreversion
 ; Sunshine installer, bundled (downloaded by fetch-components.ps1).
 ; Kept under {app}\vendor\ so it can be re-run by hand if needed.
 Source: "..\vendor\Sunshine-Windows-AMD64-installer.msi"; DestDir: "{app}\vendor"; Flags: ignoreversion
@@ -56,31 +58,46 @@ Source: "..\licenses\SUNSHINE-SOURCE-OFFER.txt"; DestDir: "{app}\licenses"; Flag
 Source: "..\licenses\TAILSCALE-NOTICE.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "..\vendor\MANIFEST.md"; DestDir: "{app}\licenses"; Flags: ignoreversion
 
+[Registry]
+Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "LULU Remote Host"; ValueData: """{app}\lulu_remote.exe"" --tray"; Flags: uninsdeletevalue
+
 [Icons]
+Name: "{group}\LULU Remote"; Filename: "{app}\lulu_remote.exe"
 Name: "{group}\Sunshine"; Filename: "{autopf}\Sunshine\sunshine.exe"
 Name: "{group}\{cm:UninstallProgram,LULU Remote Host}"; Filename: "{uninstallexe}"
 
 [Code]
-function SunshineInstalled: Boolean;
+procedure RunHostStep(const FileName, Params, Step: String; AllowRestart: Boolean);
+var
+  ResultCode: Integer;
 begin
-  Result := FileExists('C:\Program Files\Sunshine\sunshine.exe');
+  if not Exec(FileName, Params, ExpandConstant('{app}'), SW_HIDE,
+      ewWaitUntilTerminated, ResultCode) then
+    RaiseException(Step + ' could not start. Windows error ' + IntToStr(ResultCode) + '.');
+  if (ResultCode <> 0) and not (AllowRestart and (ResultCode = 3010)) then
+    RaiseException(Step + ' failed. Exit code ' + IntToStr(ResultCode) + '.');
 end;
 
-function TailscaleInstalled: Boolean;
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  PowerShell: String;
 begin
-  Result := FileExists('C:\Program Files\Tailscale\tailscale.exe');
+  if CurStep <> ssPostInstall then Exit;
+  PowerShell := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+  if not FileExists(ExpandConstant('{autopf}\Sunshine\sunshine.exe')) then
+    RunHostStep(ExpandConstant('{sys}\msiexec.exe'),
+      '/i "' + ExpandConstant('{app}\vendor\Sunshine-Windows-AMD64-installer.msi') + '" /qn /norestart',
+      'Sunshine installation', True);
+  if not FileExists(ExpandConstant('{autopf}\Tailscale\tailscale.exe')) then
+    RunHostStep(PowerShell, '-NoProfile -ExecutionPolicy Bypass -File "' +
+      ExpandConstant('{app}\vendor\install-tailscale.ps1') + '"', 'Tailscale installation', False);
+  RunHostStep(PowerShell, '-NoProfile -ExecutionPolicy Bypass -File "' +
+    ExpandConstant('{app}\vendor\finalize-host.ps1') + '"', 'Sunshine startup and readiness check', False);
 end;
 
 [Run]
-; Sunshine, silent. Skipped if already installed.
-Filename: "{sys}\msiexec.exe"; Parameters: "/i ""{app}\vendor\Sunshine-Windows-AMD64-installer.msi"" /qn /norestart"; StatusMsg: "正在安装 Sunshine…"; Check: not SunshineInstalled; Flags: waituntilterminated
-; Tailscale, downloaded + SHA-256 verified + silently installed by script.
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -NoProfile -File ""{app}\vendor\install-tailscale.ps1"""; StatusMsg: "正在安装 Tailscale（从官网下载并校验）…"; Check: not TailscaleInstalled; Flags: waituntilterminated
-; Firewall rules + start Sunshine.
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -NoProfile -File ""{app}\vendor\finalize-host.ps1"""; StatusMsg: "正在配置 Sunshine…"; Flags: waituntilterminated
-; Open the Sunshine web UI so the user creates the admin account once.
-; LULU needs that username + password once for in-app pairing.
 Filename: "https://localhost:47990"; Description: "打开 Sunshine 网页，创建管理员账号"; Flags: postinstall shellexec skipifsilent
+Filename: "{app}\lulu_remote.exe"; Parameters: "--tray"; Description: "启动 LULU 配对提醒"; Flags: postinstall nowait skipifsilent runasoriginaluser
 
 [UninstallRun]
 ; Uninstall removes LULU Host files only. Sunshine and Tailscale are

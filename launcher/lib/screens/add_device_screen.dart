@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../app.dart';
 import '../models/device.dart';
+import '../services/mesh_status_service.dart';
 
 /// Add a host: name + mesh address. No password is asked here — the
 /// Sunshine admin password is entered on the pairing screen, once.
@@ -27,7 +28,9 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
   late NetworkKind _network = widget.device?.network ?? NetworkKind.tailscale;
   String? _error;
 
-  void _save() {
+  bool _saving = false;
+
+  Future<void> _save() async {
     final name = _nameController.text.trim();
     final address = _addressController.text.trim();
     final appName = _appController.text.trim();
@@ -37,9 +40,7 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
       setState(() => _error = '请填写对方电脑的地址和应用名。');
       return;
     }
-    if (!RegExp(r'^[a-zA-Z0-9][a-zA-Z0-9.-]*$').hasMatch(address) ||
-        address.toLowerCase() == 'localhost' ||
-        address.startsWith('127.')) {
+    if (!RegExp(r'^[a-zA-Z0-9][a-zA-Z0-9.-]*$').hasMatch(address)) {
       setState(() => _error = '请填对方电脑显示的地址，例如 192.168.1.23。');
       return;
     }
@@ -52,6 +53,21 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
       setState(() => _error = 'Sunshine 端口请填 6–65535，网页端口请填 1–65535。');
       return;
     }
+    setState(() => _saving = true);
+    final mesh = MeshStatusService();
+    try {
+      final local = await mesh.localAddresses();
+      if (!mounted) return;
+      if (mesh.isLocalAddress(address, local)) {
+        setState(() => _error = MeshStatusService.selfAddressMessage);
+        return;
+      }
+    } on Exception {
+      if (mounted) setState(() => _error = '无法检查本机地址，请重试。');
+      return;
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
     final existing = widget.device;
     final sameHost = existing != null &&
         existing.meshAddress == address &&
@@ -63,7 +79,7 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
         id: existing?.id ?? 'pc-${DateTime.now().microsecondsSinceEpoch}',
         name: name.isEmpty ? address : name,
         meshAddress: address,
-        network: _network,
+        network: NetworkKind.detect(address) ?? _network,
         sunshinePort: sunshinePort,
         webPort: webPort,
         appName: appName,
@@ -165,7 +181,8 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
                 Text(_error!, style: const TextStyle(color: Colors.redAccent)),
               ],
               const SizedBox(height: 16),
-              ElevatedButton(onPressed: _save, child: const Text('保存')),
+              ElevatedButton(
+                  onPressed: _saving ? null : _save, child: const Text('保存')),
             ],
           ),
         ),

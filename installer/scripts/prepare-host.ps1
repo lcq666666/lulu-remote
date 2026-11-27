@@ -8,6 +8,7 @@ if (-not $service) {
     if ($result.ExitCode -ne 0) { exit $result.ExitCode }
     $service = Get-Service -Name 'SunshineService'
 }
+Set-Service -InputObject $service -StartupType Automatic
 if ($service.Status -ne 'Running') {
     Start-Service -InputObject $service
     $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(20))

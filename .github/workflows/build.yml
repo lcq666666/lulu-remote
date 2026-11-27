@@ -79,6 +79,8 @@ jobs:
           Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/jrsoftware/issrc/is-6_7_1/Files/Languages/Unofficial/ChineseSimplified.isl' -OutFile $language
       - name: Build LULU Windows installer
         run: iscc installer\client\LULU-Remote-Setup.iss
+      - name: Build LULU Windows host installer
+        run: iscc installer\host\LULU-Host-Setup.iss
       - name: Build portable Windows ZIP
         run: ./installer/scripts/build-portable.ps1
       - name: Upload Windows packages
@@ -87,6 +89,7 @@ jobs:
           name: windows-installers
           path: |
             installer/dist/LULU-Remote-Setup-*.exe
+            installer/dist/LULU-Host-Setup-*.exe
             installer/dist/LULU-Remote-Portable-*.zip
             installer/vendor/MANIFEST.md
           if-no-files-found: error

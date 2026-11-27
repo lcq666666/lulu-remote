@@ -39,6 +39,8 @@ void main() {
       final pending = Completer<String>();
       final code = Completer<String>();
       final challenge = Completer<void>();
+      final automaticAttempt = Completer<void>();
+      var postCount = 0;
       HttpResponse? certificateResponse;
       addTearDown(() async {
         if (!challenge.isCompleted) challenge.complete();
@@ -54,6 +56,13 @@ void main() {
         }
         if (request.method == 'POST') {
           await request.drain<void>();
+          postCount++;
+          if (!automatic && postCount == 1) {
+            response.statusCode = 500;
+            await response.close();
+            automaticAttempt.complete();
+            return;
+          }
           certificateResponse!.write(
             '<root status_code="200"><paired>1</paired><plaincert>$certificate</plaincert></root>',
           );
@@ -80,10 +89,12 @@ void main() {
       });
       final result = PairingService(secureStore: SecureStore()).pair(
         device: device,
-        adminUser: automatic ? 'test' : null,
-        adminPassword: automatic ? 'test' : null,
+        adminUser: 'test',
+        adminPassword: 'test',
         onProgress: (progress) {
-          if (!automatic && progress.pin != null) code.complete(progress.pin!);
+          if (!code.isCompleted && progress.pin != null) {
+            code.complete(progress.pin!);
+          }
         },
       );
       final verifiesChallenge = expectLater(
@@ -93,6 +104,7 @@ void main() {
                 .having((error) => error.message, 'message', contains('第 2 步')),
           ));
       if (!automatic) {
+        await automaticAttempt.future.timeout(const Duration(seconds: 5));
         final api = SunshinePinApi();
         final name = await pending.future.timeout(const Duration(seconds: 5));
         final requests = await api.listPairings(device, 'test', 'test');

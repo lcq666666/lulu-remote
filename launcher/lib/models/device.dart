@@ -1,3 +1,5 @@
+import 'dart:io';
+
 /// A remote Windows PC (a Sunshine host).
 ///
 /// Only non-secret fields are stored here. The Sunshine admin password,
@@ -104,11 +106,25 @@ class Device {
       );
 }
 
-enum NetworkKind { tailscale, zerotier }
+enum NetworkKind {
+  tailscale,
+  zerotier,
+  natpierce;
+
+  static NetworkKind? detect(String host) {
+    final ip = InternetAddress.tryParse(host);
+    if (ip == null || ip.type != InternetAddressType.IPv4) return null;
+    final bytes = ip.rawAddress;
+    if (bytes[0] == 10) return natpierce;
+    if (bytes[0] == 100 && bytes[1] >= 64 && bytes[1] <= 127) return tailscale;
+    return null;
+  }
+}
 
 extension NetworkKindLabel on NetworkKind {
   String get label => switch (this) {
         NetworkKind.tailscale => 'Tailscale',
         NetworkKind.zerotier => 'ZeroTier',
+        NetworkKind.natpierce => '皎月连',
       };
 }
