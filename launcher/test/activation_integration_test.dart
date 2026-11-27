@@ -10,7 +10,7 @@ import 'activation_test.dart' show MemoryStore;
 
 void main() {
   final executable = Platform.environment['LULU_AUTH_TEST_EXE'];
-  test('Go server and Flutter client activate, start offline and revoke',
+  test('activation, weekly review, offline retry and signed revocation',
       () async {
     SharedPreferences.setMockInitialValues({});
     final data = await Directory.systemTemp.createTemp('lulu-activation-test-');
@@ -97,6 +97,13 @@ void main() {
     await expectError(
         second.activate(key, host, android), ActivationError.usedKey);
     expect((await second.activate(spareKey, host, android)).active, isTrue);
+    now = now.add(const Duration(days: 7));
+    expect(await service.checkRevocation(), isFalse);
+    expect((await service.load()).active, isTrue);
+    await cli(['devices', 'revoke', windows.hash]);
+    expect(await service.checkRevocation(), isFalse,
+        reason: 'a review sent to the server uses the weekly allowance');
+
     await stopServer();
     final bootedOffline = ActivationService(
         store: store,
@@ -107,13 +114,12 @@ void main() {
     now = now.add(const Duration(days: 7));
     expect(await bootedOffline.checkRevocation(), isFalse);
     expect((await bootedOffline.load()).active, isTrue);
-
-    await cli(['devices', 'revoke', windows.hash]);
     await startServer();
     expect(await bootedOffline.checkRevocation(), isFalse,
-        reason: 'weekly interval');
-    now = now.add(const Duration(days: 7));
-    expect(await bootedOffline.checkRevocation(), isTrue);
+        reason: 'unreachable server readiness checks are throttled');
+    now = now.add(const Duration(minutes: 5));
+    expect(await bootedOffline.checkRevocation(), isTrue,
+        reason: 'an offline attempt did not use the weekly allowance');
     expect(await store.readActivationToken(), isNull);
     expect((await bootedOffline.load()).error, ActivationError.revoked);
     await expectError(bootedOffline.activate(replacementKey, host, windows),
