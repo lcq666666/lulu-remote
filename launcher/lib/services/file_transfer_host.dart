@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'file_transfer_service.dart';
+import 'host_tools_service.dart';
 import 'mesh_status_service.dart';
 import 'power_service.dart';
 import 'secure_store.dart';
@@ -30,6 +31,9 @@ class FileTransferHost {
   final _listeners = <String, HttpServer>{};
   FileTransferServer? _handler;
   PowerServer? _power;
+  HostToolsServer? _tools;
+  Future<String>? _readingToolsCode;
+  static const _clipboardKey = 'qg_clipboard_enabled';
   Future<String>? _readingCode;
   int _settingsGeneration = 0;
   Timer? _timer;
@@ -132,6 +136,50 @@ class FileTransferHost {
     return code;
   }
 
+  Future<bool> clipboardEnabled() async =>
+      (await SharedPreferences.getInstance()).getBool(_clipboardKey) ?? false;
+
+  Future<void> setClipboardEnabled(bool enabled) async {
+    _settingsGeneration++;
+    if (!enabled) _disableTools();
+    final prefs = await SharedPreferences.getInstance();
+    if (!await prefs.setBool(_clipboardKey, enabled)) {
+      await prefs.reload();
+      throw StateError('无法保存剪贴板设置。');
+    }
+    await refresh();
+  }
+
+  Future<String> toolsCode() => _readingToolsCode ??=
+      _loadToolsCode().whenComplete(() => _readingToolsCode = null);
+
+  Future<String> _loadToolsCode() async {
+    final value = await _secureStore.readHostToolsCode();
+    return value != null && validTransferCode(value)
+        ? value
+        : _writeToolsCode();
+  }
+
+  Future<String> _writeToolsCode() async {
+    final value = newTransferCode();
+    await _secureStore.writeHostToolsCode(value);
+    return value;
+  }
+
+  Future<String> rotateToolsCode() async {
+    if (_readingToolsCode case final active?) await active;
+    _settingsGeneration++;
+    _disableTools();
+    final code = await _writeToolsCode();
+    await refresh();
+    return code;
+  }
+
+  void _disableTools() {
+    _tools?.active = false;
+    _tools = null;
+  }
+
   void _disablePower() {
     _power?.enabled = false;
     _power = null;
@@ -139,6 +187,7 @@ class FileTransferHost {
 
   Future<void> _disableCurrent() async {
     _disablePower();
+    _disableTools();
     await _closeListeners();
   }
 
@@ -157,7 +206,8 @@ class FileTransferHost {
     try {
       final fileEnabled = await isEnabled();
       final powerEnabled = await PowerAccess.instance.isEnabled();
-      if (_timer == null || !(fileEnabled || powerEnabled)) {
+      final clipboard = await clipboardEnabled();
+      if (_timer == null || !(fileEnabled || powerEnabled || clipboard)) {
         await _disableCurrent();
         return;
       }
@@ -165,6 +215,7 @@ class FileTransferHost {
       final secret = fileEnabled ? await code() : null;
       final powerSecret =
           powerEnabled ? await PowerAccess.instance.code() : null;
+      final toolsSecret = clipboard ? await toolsCode() : null;
       final addresses = (await MeshStatusService().localAddresses())
           .where((entry) =>
               entry.network != null && isPrivateTransferAddress(entry.address))
@@ -187,6 +238,18 @@ class FileTransferHost {
       } else if (_power?.code != powerSecret) {
         _disablePower();
         _power = PowerServer(code: powerSecret, run: PowerServer.runOnWindows);
+      }
+      if (toolsSecret == null) {
+        _disableTools();
+      } else if (_tools?.code != toolsSecret) {
+        _disableTools();
+        _tools = HostToolsServer(
+          code: toolsSecret,
+          readClipboard: () async =>
+              (await Clipboard.getData(Clipboard.kTextPlain))?.text ?? '',
+          writeClipboard: (text) =>
+              Clipboard.setData(ClipboardData(text: text)),
+        )..clipboardEnabled = clipboard;
       }
       final expired = _listeners.keys
           .where((address) => !addresses.contains(address))
@@ -221,6 +284,11 @@ class FileTransferHost {
       if (PowerServer.handles(request.uri.path)) {
         if (_power case final power?) {
           unawaited(power.handle(request));
+          return;
+        }
+      } else if (HostToolsServer.handles(request.uri.path)) {
+        if (_tools case final tools?) {
+          unawaited(tools.handle(request));
           return;
         }
       } else if (_handler case final files?) {

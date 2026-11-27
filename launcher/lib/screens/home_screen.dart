@@ -18,6 +18,7 @@ import '../services/power_service.dart';
 import '../services/secure_store.dart';
 import '../services/wake_on_lan.dart';
 import '../widgets/device_card.dart';
+import '../widgets/clipboard_share.dart';
 import '../widgets/file_transfer_dialog.dart';
 import '../widgets/lulu_ui.dart';
 import '../widgets/power_settings.dart';
@@ -811,6 +812,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                         barrierDismissible: false,
                                         builder: (_) =>
                                             FileTransferDialog(device: device),
+                                      ),
+                                      onClipboard: () => showDialog<void>(
+                                        context: context,
+                                        barrierDismissible: false,
+                                        builder: (_) => ClipboardShareDialog(
+                                            device: device),
                                       ),
                                       onPower: (action) =>
                                           _powerAction(device, action),

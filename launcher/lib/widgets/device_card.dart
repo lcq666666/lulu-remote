@@ -6,7 +6,16 @@ import '../services/mesh_status_service.dart';
 import '../services/power_service.dart';
 import 'lulu_ui.dart';
 
-enum _DeviceAction { transfer, edit, delete, help, restart, shutdown, signOut }
+enum _DeviceAction {
+  transfer,
+  clipboard,
+  edit,
+  delete,
+  help,
+  restart,
+  shutdown,
+  signOut
+}
 
 class DeviceCard extends StatefulWidget {
   const DeviceCard(
@@ -20,6 +29,7 @@ class DeviceCard extends StatefulWidget {
       this.mobile = false,
       this.busy = false,
       this.onTransfer,
+      this.onClipboard,
       this.onWake,
       this.waking = false,
       this.onPower,
@@ -37,6 +47,7 @@ class DeviceCard extends StatefulWidget {
   final bool busy;
   final VoidCallback onConnect;
   final VoidCallback? onTransfer;
+  final VoidCallback? onClipboard;
   final VoidCallback? onWake;
   final bool waking;
   final ValueChanged<PowerAction>? onPower;
@@ -65,6 +76,8 @@ class _DeviceCardState extends State<DeviceCard> {
         widget.onPower?.call(PowerAction.signOut);
       case _DeviceAction.transfer:
         widget.onTransfer?.call();
+      case _DeviceAction.clipboard:
+        widget.onClipboard?.call();
       case _DeviceAction.edit:
         widget.onEdit?.call();
       case _DeviceAction.delete:
@@ -110,6 +123,13 @@ class _DeviceCardState extends State<DeviceCard> {
                         title: const Text('发送文件'),
                         onTap: () =>
                             Navigator.pop(context, _DeviceAction.transfer),
+                      ),
+                    if (widget.onClipboard != null)
+                      ListTile(
+                        leading: const Icon(Icons.content_paste_outlined),
+                        title: const Text('文本剪贴板'),
+                        onTap: () =>
+                            Navigator.pop(context, _DeviceAction.clipboard),
                       ),
                     if (widget.onEdit != null)
                       ListTile(
@@ -205,6 +225,7 @@ class _DeviceCardState extends State<DeviceCard> {
     );
     final actions = widget.onPower != null ||
         widget.onTransfer != null ||
+        widget.onClipboard != null ||
         widget.onEdit != null ||
         widget.onDelete != null ||
         widget.onAndroidHelp != null;
@@ -247,6 +268,9 @@ class _DeviceCardState extends State<DeviceCard> {
                   if (widget.onTransfer != null)
                     const PopupMenuItem(
                         value: _DeviceAction.transfer, child: Text('发送文件')),
+                  if (widget.onClipboard != null)
+                    const PopupMenuItem(
+                        value: _DeviceAction.clipboard, child: Text('文本剪贴板')),
                   if (widget.onEdit != null)
                     const PopupMenuItem(
                         value: _DeviceAction.edit, child: Text('编辑')),
