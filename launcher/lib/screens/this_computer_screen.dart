@@ -14,6 +14,7 @@ import '../widgets/lulu_ui.dart';
 import '../widgets/connection_log_view.dart';
 import '../widgets/file_transfer_settings.dart';
 import '../widgets/privacy_screen_settings.dart';
+import '../widgets/power_settings.dart';
 import 'setup_checklist_screen.dart';
 
 class ThisComputerScreen extends StatefulWidget {
@@ -341,6 +342,8 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
           const PrivacyScreenSettings(),
           const Divider(),
           const FileTransferSettings(),
+          const Divider(),
+          const PowerSettings(),
           const Divider(),
           ListTile(
             leading: const Icon(Icons.history),

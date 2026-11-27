@@ -10,12 +10,16 @@ import '../models/device.dart';
 import '../models/quality_preset.dart';
 import '../services/component_installer.dart';
 import '../services/device_store.dart';
+import '../services/file_transfer_host.dart';
+import '../services/file_transfer_service.dart';
 import '../services/mesh_status_service.dart';
 import '../services/moonlight_launcher.dart';
+import '../services/power_service.dart';
 import '../services/secure_store.dart';
 import '../widgets/device_card.dart';
 import '../widgets/file_transfer_dialog.dart';
 import '../widgets/lulu_ui.dart';
+import '../widgets/power_settings.dart';
 import 'add_device_screen.dart';
 import 'pairing_screen.dart';
 import 'setup_checklist_screen.dart';
@@ -242,6 +246,40 @@ class _HomeScreenState extends State<HomeScreen> {
     await stderr;
     final message = error.toString().trim();
     return message.isEmpty ? 'Moonlight 已退出（退出码 $code）。' : message;
+  }
+
+  Future<void> _powerAction(Device device, PowerAction action) async {
+    if (!isPrivateTransferAddress(device.meshAddress)) {
+      showLuluSnack(context, '请使用被控电脑的组网 IPv4 地址。');
+      return;
+    }
+    final store = SecureStore();
+    var saved = '';
+    try {
+      saved = await store.readPowerCode(device.id) ?? '';
+    } on Exception {
+      // The operator can still enter the code manually.
+    }
+    if (!mounted) return;
+    final code = await showDialog<String>(
+        context: context,
+        builder: (_) => PowerConfirmation(
+            action: action, deviceName: device.name, code: saved));
+    if (code == null || !mounted) return;
+    try {
+      await const PowerClient().submit(
+          Uri(scheme: 'http', host: device.meshAddress, port: fileTransferPort),
+          code,
+          action);
+      if (mounted) showLuluSnack(context, '被控电脑已接收${action.label}请求。');
+      try {
+        await store.writePowerCode(device.id, code);
+      } on Exception {
+        // The command result is independent of saving the authorization.
+      }
+    } on FileTransferFailure catch (error) {
+      if (mounted) showLuluSnack(context, error.message);
+    }
   }
 
   Future<void> _disconnectWindows(Device device) async {
@@ -714,6 +752,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 builder: (_) =>
                                     FileTransferDialog(device: device),
                               ),
+                              onPower: (action) => _powerAction(device, action),
                               onEdit: () => _openAddDevice(device),
                               onDelete: () => _deleteDevice(device),
                               onDisconnect: windows && device.paired

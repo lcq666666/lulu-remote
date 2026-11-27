@@ -69,12 +69,22 @@ class SecureStore {
   Future<void> writeTransferCode(String deviceId, String value) =>
       _storage.write(key: _key('transfer_code', deviceId), value: value);
 
+  Future<String?> readHostPowerCode() =>
+      _storage.read(key: _key('host_power_code'));
+  Future<void> writeHostPowerCode(String value) =>
+      _storage.write(key: _key('host_power_code'), value: value);
+  Future<String?> readPowerCode(String deviceId) =>
+      _storage.read(key: _key('power_code', deviceId));
+  Future<void> writePowerCode(String deviceId, String value) =>
+      _storage.write(key: _key('power_code', deviceId), value: value);
+
   Future<void> deleteDeviceSecrets(String deviceId) async {
     for (final name in [
       'server_cert_hex',
       'sunshine_user',
       'sunshine_password',
-      'transfer_code'
+      'transfer_code',
+      'power_code'
     ]) {
       await _storage.delete(key: _key(name, deviceId));
     }
