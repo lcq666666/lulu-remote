@@ -172,15 +172,15 @@ jobs:
             dist/android-apk/*.apk
             dist/windows-installers/vendor/MANIFEST.md
           body: |
-            ### 0.1.5 更新
+            ### 0.1.6 更新
 
-            - 首次配对第 8 步会使用新连接交换信息，避免使用已关闭的连接。
-            - 「让别人连接我」会在本机远程服务启动期间自动刷新状态，服务就绪后显示「远程服务已开启」。
+            - 修复首次配对第 9 步对标准 SHA-256 签名的误判，保留对方身份和配对码校验。
+            - 增加 OpenSSL 签名测试，以及使用 0.1.5 已保存身份完成配对和授权确认的回归测试。
 
             ### Windows
 
-            两台电脑都可下载 `LULU-Remote-Setup-0.1.5.exe` 覆盖安装。安装前可从托盘退出正在运行的 LULU。也可下载 `LULU-Remote-Portable-0.1.5-x64.zip`，解压整个文件夹后打开 `lulu_remote.exe`。
-            被控电脑在「让别人连接我」中开启远程控制并设置本机管理账号。需要专门部署被控电脑时，也可用 `LULU-Host-Setup-0.1.5.exe`，它会设置 Windows 登录后自动在托盘启动。
+            两台电脑都可下载 `LULU-Remote-Setup-0.1.6.exe` 覆盖安装。安装前可从托盘退出正在运行的 LULU。也可下载 `LULU-Remote-Portable-0.1.6-x64.zip`，解压整个文件夹后打开 `lulu_remote.exe`。
+            被控电脑在「让别人连接我」中开启远程控制并设置本机管理账号。需要专门部署被控电脑时，也可用 `LULU-Host-Setup-0.1.6.exe`，它会设置 Windows 登录后自动在托盘启动。
             控制电脑在「连接电脑」中填入被控电脑显示的地址，然后发起配对。
 
             ### Android

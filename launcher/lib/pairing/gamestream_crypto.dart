@@ -61,9 +61,12 @@ Uint8List aesEcb(Uint8List key, Uint8List data, {required bool encrypt}) {
   return out;
 }
 
+// DER encoding of the SHA-256 object identifier (2.16.840.1.101.3.4.2.1).
+const _sha256DigestIdentifier = '0609608648016503040201';
+
 /// RSA PKCS#1 v1.5, SHA-256 — the signature over a 16-byte secret.
 Uint8List rsaSignSha256(RSAPrivateKey key, Uint8List data) {
-  final signer = RSASigner(SHA256Digest(), '0609608648016503040301')
+  final signer = RSASigner(SHA256Digest(), _sha256DigestIdentifier)
     ..init(true, PrivateKeyParameter<RSAPrivateKey>(key));
   return signer.generateSignature(data).bytes;
 }
@@ -71,7 +74,7 @@ Uint8List rsaSignSha256(RSAPrivateKey key, Uint8List data) {
 /// RSA PKCS#1 v1.5, SHA-256 verification against a public key parsed
 /// from a certificate (see [extractRsaPublicKeyFromCert]).
 bool rsaVerifySha256(RSAPublicKey key, Uint8List data, Uint8List signature) {
-  final verifier = RSASigner(SHA256Digest(), '0609608648016503040301')
+  final verifier = RSASigner(SHA256Digest(), _sha256DigestIdentifier)
     ..init(false, PublicKeyParameter<RSAPublicKey>(key));
   return verifier.verifySignature(data, RSASignature(signature));
 }

@@ -23,6 +23,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lulu_remote/pairing/client_identity.dart';
 import 'package:lulu_remote/pairing/gamestream_crypto.dart';
+import 'package:pointycastle/export.dart';
 
 void main() {
   test('SHA-256 known vector', () {
@@ -81,6 +82,35 @@ void main() {
       final encrypted = aesEcb(key, data, encrypt: true);
       expect(aesEcb(key, encrypted, encrypt: false), data);
     }
+  });
+
+  test('verifies an OpenSSL RSA-SHA256 pairing signature', () {
+    // Generated with OpenSSL-backed PKCS#1 v1.5 signing. Only the public
+    // modulus and signature are retained, so this does not test a round-trip.
+    final modulus = base64Decode(
+      '2CiROG9URLAzgd5aUlPcpCCeyMmJnkIoeNphMcC81d6bL6cFca9DSyzoxySWie4B'
+      'kQgl4PBVr9jjVH4W/t9B65AeF6fgo97PmZkyygYGS2VLMJ0vmMQGRonNsuG30m2s'
+      'u9NEBeU5YtljiXMgMD20sIte5sop2AaJ6gkxioScowGzduFo5DkMeuekM8BjH0UC'
+      'qSMkms1crnC1BsMZ+enJj3WwUl+uJpbMQT+9vHz6Li39XNgmiLtj+1glLJ9h6Mi2'
+      'oSu7XF7wnT4TIDxt/GDTYG/Mz9Ht8ulXtIT6FV6fpFPmvhqjQH9BeuXYPBWNK81t'
+      'YEjxq+ZI2nR2+m2UcYqKew==',
+    );
+    final publicKey = RSAPublicKey(
+      BigInt.parse(hexEncode(modulus), radix: 16),
+      BigInt.from(65537),
+    );
+    final signature = base64Decode(
+      'x2SN3+OcNHWaOq+e16/KxJCSaf8ga+cObODbSf3t8diYuUi40XcqjyhUMmslS8TF'
+      'DE6Eh9PgNHkBRY+Fzx3GZ19X7perMXklWBzDJbR4MPcOLxRzx63+jn9WGf6Dt71Q'
+      'Y3Gb6tw9mU27b8GnkeTiDeb0/6v3+htr9VQLu17NFmRTvrsr7mfmgkDyn+N2rUys'
+      'N+Ma/YB5G3j6XpTDgmQjGXdNoFiOtT0d+mh0jrUsxy+sGPL0UBzph6SKB/4dQtEE'
+      '8vhI8CGjDkF7V7PpAkCUXyFK90hBnkEoj6cWs9REd+5Mtm8pWdACC1m4+r2EZtU8'
+      'FfjZIVTnSagwzAKTry1vjg==',
+    );
+    final secret = Uint8List.fromList(ascii.encode('LULU pairingtest'));
+    expect(rsaVerifySha256(publicKey, secret, signature), isTrue);
+    secret[0] ^= 1;
+    expect(rsaVerifySha256(publicKey, secret, signature), isFalse);
   });
 
   test(
