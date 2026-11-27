@@ -41,6 +41,7 @@ void main() {
       final challenge = Completer<void>();
       final automaticAttempt = Completer<void>();
       var postCount = 0;
+      final pairingConnections = <String?>[];
       HttpResponse? certificateResponse;
       addTearDown(() async {
         if (!challenge.isCompleted) challenge.complete();
@@ -49,6 +50,10 @@ void main() {
       server.listen((request) async {
         final query = request.uri.queryParameters;
         final HttpResponse response = request.response;
+        if (request.uri.path == '/pair') {
+          pairingConnections
+              .add(request.headers.value(HttpHeaders.connectionHeader));
+        }
         if (query['phrase'] == 'getservercert') {
           certificateResponse = response;
           pending.complete(query['devicename']!);
@@ -122,6 +127,7 @@ void main() {
       }
       await verifiesChallenge.timeout(const Duration(seconds: 8));
       expect(challenge.isCompleted, isTrue);
+      expect(pairingConnections, ['close', 'close']);
     });
   }
 }

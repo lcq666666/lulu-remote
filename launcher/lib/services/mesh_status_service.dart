@@ -56,7 +56,7 @@ class MeshStatusService {
   }
 
   static bool connectionRefused(SocketException error) =>
-      const {10061, 111, 61}.contains(error.osError?.errorCode);
+      const {10061, 1225, 111, 61}.contains(error.osError?.errorCode);
 
   Future<void> verifyLocalHost() async {
     const timeout = Duration(seconds: 3);

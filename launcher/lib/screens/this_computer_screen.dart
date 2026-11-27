@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -26,6 +27,8 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
   bool _busy = true;
   List<LocalAddress> _addresses = [];
   String? _message;
+  String? _hostFailure;
+  Timer? _hostRetry;
 
   @override
   void initState() {
@@ -33,14 +36,38 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
     _perform(_refresh);
   }
 
-  Future<void> _refresh({bool reportHostFailure = false}) async {
-    final addresses = await _network.localAddresses();
-    String? hostFailure;
+  @override
+  void dispose() {
+    _hostRetry?.cancel();
+    super.dispose();
+  }
+
+  Future<String?> _readHostFailure() async {
     try {
       await _network.verifyLocalHost();
+      return null;
     } on StateError catch (error) {
-      hostFailure = error.message;
+      return error.message;
     }
+  }
+
+  void _scheduleHostRetry() {
+    _hostRetry = Timer(const Duration(seconds: 2), () async {
+      final currentRetry = _hostRetry;
+      final failure = await _readHostFailure();
+      if (!mounted || _hostRetry != currentRetry) return;
+      _hostRetry = null;
+      setState(() {
+        _hostFailure = failure;
+        _available = failure == null;
+      });
+      if (!_available) _scheduleHostRetry();
+    });
+  }
+
+  Future<void> _refresh() async {
+    final addresses = await _network.localAddresses();
+    final hostFailure = await _readHostFailure();
     final startup =
         await Process.run('reg.exe', ['query', _runKey, '/v', _runName]);
     final installedStartup = await Process.run('reg.exe', [
@@ -54,13 +81,15 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
     setState(() {
       _installedStartup = installedStartup.exitCode == 0;
       _available = hostFailure == null;
-      if (reportHostFailure) _message = hostFailure;
+      _hostFailure = hostFailure;
       _autoStart = startup.exitCode == 0;
       _addresses = addresses;
     });
   }
 
   Future<void> _perform(Future<void> Function() action) async {
+    _hostRetry?.cancel();
+    _hostRetry = null;
     setState(() {
       _busy = true;
       _message = null;
@@ -73,7 +102,10 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
             () => _message = error is StateError ? error.message : '操作失败，请重试。');
       }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() => _busy = false);
+        if (!_available) _scheduleHostRetry();
+      }
     }
   }
 
@@ -97,7 +129,7 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
 
   Future<void> _enableHost() async {
     await ComponentInstaller().prepareWindowsHost();
-    await _refresh(reportHostFailure: true);
+    await _refresh();
   }
 
   @override
@@ -122,11 +154,15 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
               Text(Platform.localHostname,
                   style: Theme.of(context).textTheme.headlineSmall),
               const SizedBox(height: 8),
-              Text(_available ? '远程服务已开启' : '远程服务未开启'),
+              Text(_busy
+                  ? '正在检查远程服务…'
+                  : _available
+                      ? '远程服务已开启'
+                      : '远程服务暂未就绪，正在自动检查'),
               if (_busy) const LinearProgressIndicator(),
-              if (_message != null) ...[
+              if ((_message ?? _hostFailure) case final message?) ...[
                 const SizedBox(height: 8),
-                Text(_message!),
+                Text(message),
               ],
               const SizedBox(height: 16),
               if (!_available)

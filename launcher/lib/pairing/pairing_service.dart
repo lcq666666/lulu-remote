@@ -351,6 +351,8 @@ class PairingService {
     Future<XmlDocument> run() async {
       final request = await client.getUrl(uri);
       request.followRedirects = false;
+      // Sunshine closes NVHTTP sockets even without a Connection: close header.
+      request.persistentConnection = false;
       final response = await request.close();
       final text = await response.transform(utf8.decoder).join();
       if (response.statusCode != 200) {
