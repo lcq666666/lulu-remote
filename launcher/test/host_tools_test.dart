@@ -76,12 +76,52 @@ void main() {
 
   test('Windows executes the three queries and reports their exit code',
       () async {
-    for (final query in RemoteCommand.values) {
+    for (final query in [
+      RemoteCommand.hostname,
+      RemoteCommand.version,
+      RemoteCommand.user,
+    ]) {
       final output = await RemoteCommand.runOnWindows(query);
       expect(output.split('\n').first, isNotEmpty);
       expect(output.split('\n').length, greaterThan(1));
       expect(output, endsWith('退出码：0'));
     }
+  }, skip: !Platform.isWindows);
+
+  test('approved recipe validates a local executable and keeps arguments', () {
+    expect(() => ApprovedWindowsCommand('cmd.exe', []), throwsFormatException);
+    expect(() => ApprovedWindowsCommand(r'\\server\share\tool.exe', []),
+        throwsFormatException);
+    final approved = ApprovedWindowsCommand(
+        r'C:\Program Files\tool.exe', ['example name', 'argument']);
+    expect(ApprovedWindowsCommand.decode(approved.encode())?.arguments,
+        ['example name', 'argument']);
+    expect(RemoteCommand.parse('approved /c'), isNull);
+  });
+
+  test('executes a Windows preset through the authenticated host API',
+      () async {
+    final systemRoot = Platform.environment['SystemRoot'] ?? r'C:\Windows';
+    final preset = ApprovedWindowsCommand(
+        '$systemRoot\\System32\\cmd.exe', ['/d', '/c', 'echo', 'QG-PRESET-OK']);
+    final service = HostToolsServer(
+      code: server.code,
+      readClipboard: () async => '',
+      writeClipboard: (_) async {},
+      runCommand: (query) =>
+          RemoteCommand.runOnWindows(query, approved: preset),
+    );
+    final endpoint = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => endpoint.close(force: true));
+    endpoint.listen(service.handle);
+    final testClient =
+        HostToolsClient('127.0.0.1', service.code, port: endpoint.port);
+    await expectLater(testClient.command(RemoteCommand.approved),
+        throwsA(isA<HostToolsException>()));
+    service.commandsEnabled = true;
+    final output = await testClient.command(RemoteCommand.approved);
+    expect(output, contains('QG-PRESET-OK'));
+    expect(output, endsWith('退出码：0'));
   }, skip: !Platform.isWindows);
 
   test('wake relay rejects missing authorization and unregistered MACs',

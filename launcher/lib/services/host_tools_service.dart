@@ -89,6 +89,7 @@ class HostToolsServer {
   final _usedHellos = <String, Duration>{};
   final _clock = Stopwatch()..start();
   int _pending = 0;
+  bool _commandRunning = false;
 
   bool _allows(String operation) =>
       active &&
@@ -195,7 +196,16 @@ class HostToolsServer {
             response.statusCode = HttpStatus.badRequest;
             return;
           }
-          result = utf8.encode(await runCommand!(query).timeout(_timeout));
+          if (_commandRunning) {
+            response.statusCode = HttpStatus.tooManyRequests;
+            return;
+          }
+          _commandRunning = true;
+          try {
+            result = utf8.encode(await runCommand!(query));
+          } finally {
+            _commandRunning = false;
+          }
         } else if (operation == 'wake') {
           final mac = WakeOnLan.normalizeMac(utf8.decode(plaintext));
           if (mac == null) throw const FormatException();
@@ -356,7 +366,10 @@ class HostToolsClient {
     request.headers.contentType = ContentType.binary;
     request.contentLength = sealed.length;
     request.add(sealed);
-    final response = await request.close().timeout(_timeout);
+    final replyTimeout = operation == 'command'
+        ? RemoteCommand.approvedTimeout + const Duration(seconds: 5)
+        : _timeout;
+    final response = await request.close().timeout(replyTimeout);
     if (response.statusCode != HttpStatus.ok) {
       throw HostToolsException(switch (response.statusCode) {
         HttpStatus.forbidden => switch (operation) {

@@ -1,3 +1,4 @@
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -58,6 +59,18 @@ class _HostToolsSettingsState extends State<HostToolsSettings> {
     }
   }
 
+  Future<void> _editCommand() async {
+    final saved = await _host.approvedWindowsCommand();
+    if (!mounted) return;
+    final choice = await showDialog<({ApprovedWindowsCommand? command})>(
+      context: context,
+      builder: (_) => _ApprovedCommandDialog(initial: saved),
+    );
+    if (!mounted || choice == null) return;
+    await _host.saveApprovedWindowsCommand(choice.command);
+    if (mounted) showLuluSnack(context, '已保存预设命令设置。');
+  }
+
   Future<void> _copy({bool rotate = false}) async {
     final code = await (rotate ? _host.rotateToolsCode() : _host.toolsCode());
     await Clipboard.setData(ClipboardData(text: code));
@@ -73,13 +86,13 @@ class _HostToolsSettingsState extends State<HostToolsSettings> {
             title: Text(switch (widget.panel) {
               HostToolPanel.clipboard => '共享文本剪贴板',
               HostToolPanel.diagnostics => '允许远程连接诊断',
-              HostToolPanel.command => '允许远程只读命令',
+              HostToolPanel.command => '允许远程命令',
               HostToolPanel.hardware => '共享硬件信息',
             }),
             subtitle: Text(switch (widget.panel) {
               HostToolPanel.clipboard => '持协作码的控制端可手动读取或替换本机剪贴板文本。',
               HostToolPanel.diagnostics => '持协作码的控制端可查询电脑名称和远程服务状态。',
-              HostToolPanel.command => '持协作码的控制端可运行 hostname、ver 和 whoami。',
+              HostToolPanel.command => '持协作码的控制端可运行内置查询和本机批准的预设命令。',
               HostToolPanel.hardware => '持协作码的控制端可查看 CPU、内存、系统盘容量和 Windows 版本。',
             }),
             value: _enabled ?? false,
@@ -114,6 +127,10 @@ class _HostToolsSettingsState extends State<HostToolsSettings> {
             ),
           if (_enabled == true)
             Wrap(spacing: 8, runSpacing: 8, children: [
+              if (widget.panel == HostToolPanel.command)
+                OutlinedButton(
+                    onPressed: _busy ? null : () => _run(_editCommand),
+                    child: const Text('配置预设命令')),
               OutlinedButton(
                   onPressed: _busy ? null : () => _run(_copy),
                   child: const Text('复制协作码')),
@@ -123,6 +140,102 @@ class _HostToolsSettingsState extends State<HostToolsSettings> {
                   child: const Text('更换协作码')),
             ]),
         ]),
+      );
+}
+
+class _ApprovedCommandDialog extends StatefulWidget {
+  const _ApprovedCommandDialog({required this.initial});
+
+  final ApprovedWindowsCommand? initial;
+
+  @override
+  State<_ApprovedCommandDialog> createState() => _ApprovedCommandDialogState();
+}
+
+class _ApprovedCommandDialogState extends State<_ApprovedCommandDialog> {
+  late final _program = TextEditingController(text: widget.initial?.executable);
+  late final _args =
+      TextEditingController(text: widget.initial?.arguments.join('\n'));
+  String? _message;
+
+  @override
+  void dispose() {
+    _program.dispose();
+    _args.dispose();
+    super.dispose();
+  }
+
+  Future<void> _chooseExecutable() async {
+    try {
+      final picked = await openFile(acceptedTypeGroups: const [
+        XTypeGroup(label: 'Windows 可执行文件', extensions: ['exe']),
+      ]);
+      if (mounted && picked != null) _program.text = picked.path;
+    } catch (_) {
+      if (mounted) setState(() => _message = '无法打开文件选择器。');
+    }
+  }
+
+  void _save() {
+    try {
+      final args = _args.text.isEmpty
+          ? const <String>[]
+          : _args.text.replaceAll('\r\n', '\n').split('\n');
+      final command = ApprovedWindowsCommand(_program.text.trim(), args);
+      Navigator.pop(context, (command: command));
+    } on FormatException catch (error) {
+      setState(() => _message = error.message);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+        title: const Text('配置被控端预设命令'),
+        scrollable: true,
+        content: SizedBox(
+          width: 440,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('启用后，持协作码的控制端可执行此程序并查看输出。请使用你信任的程序，参数里请勿填写密码。'),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _program,
+                decoration: InputDecoration(
+                  labelText: '程序的完整路径',
+                  suffixIcon: IconButton(
+                    onPressed: _chooseExecutable,
+                    tooltip: '选择 EXE',
+                    icon: const Icon(Icons.folder_open),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _args,
+                maxLines: 5,
+                minLines: 2,
+                decoration: const InputDecoration(labelText: '每行一个参数，可留空'),
+              ),
+              if (_message case final error?) Text(error),
+            ],
+          ),
+        ),
+        actions: [
+          if (widget.initial != null)
+            TextButton(
+              onPressed: () =>
+                  Navigator.pop<({ApprovedWindowsCommand? command})>(
+                      context, (command: null)),
+              child: const Text('移除'),
+            ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消'),
+          ),
+          FilledButton(onPressed: _save, child: const Text('保存预设命令')),
+        ],
       );
 }
 
@@ -312,7 +425,7 @@ class _HostToolsDialogState extends State<HostToolsDialog> {
   String get _title => switch (widget.panel) {
         HostToolPanel.clipboard => '文本剪贴板',
         HostToolPanel.diagnostics => '连接诊断',
-        HostToolPanel.command => '远程只读命令',
+        HostToolPanel.command => '远程命令',
         HostToolPanel.hardware => '硬件信息',
       };
 
@@ -395,7 +508,7 @@ class _HostToolsDialogState extends State<HostToolsDialog> {
                 HostToolPanel.clipboard =>
                   '先在被控端打开「共享文本剪贴板」。发送或接收会替换目标设备的剪贴板文本。',
                 HostToolPanel.diagnostics => '先在被控端打开「允许远程连接诊断」。',
-                HostToolPanel.command => '先在被控端打开「允许远程只读命令」。',
+                HostToolPanel.command => '先在被控端打开「允许远程命令」。',
                 HostToolPanel.hardware => '先在被控端打开「共享硬件信息」。',
               }),
               const SizedBox(height: 12),

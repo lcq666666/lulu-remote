@@ -163,7 +163,7 @@ class _DeviceCardState extends State<DeviceCard> {
                     if (widget.onCommand != null)
                       ListTile(
                         leading: const Icon(Icons.terminal),
-                        title: const Text('远程只读命令'),
+                        title: const Text('远程命令'),
                         onTap: () =>
                             Navigator.pop(context, _DeviceAction.command),
                       ),
@@ -326,7 +326,7 @@ class _DeviceCardState extends State<DeviceCard> {
                         value: _DeviceAction.diagnostics, child: Text('连接诊断')),
                   if (widget.onCommand != null)
                     const PopupMenuItem(
-                        value: _DeviceAction.command, child: Text('远程只读命令')),
+                        value: _DeviceAction.command, child: Text('远程命令')),
                   if (widget.onClipboard != null)
                     const PopupMenuItem(
                         value: _DeviceAction.clipboard, child: Text('文本剪贴板')),

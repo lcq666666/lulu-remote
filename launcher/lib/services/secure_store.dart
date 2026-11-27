@@ -78,6 +78,12 @@ class SecureStore {
   Future<void> writePowerCode(String deviceId, String value) =>
       _storage.write(key: _key('power_code', deviceId), value: value);
 
+  Future<String?> readApprovedWindowsCommand() =>
+      _storage.read(key: _key('approved_windows_command'));
+  Future<void> writeApprovedWindowsCommand(String? value) => value == null
+      ? _storage.delete(key: _key('approved_windows_command'))
+      : _storage.write(key: _key('approved_windows_command'), value: value);
+
   Future<String?> readHostToolsCode() =>
       _storage.read(key: _key('host_tools_code'));
   Future<void> writeHostToolsCode(String value) =>

@@ -188,6 +188,23 @@ class FileTransferHost {
     await refresh();
   }
 
+  Future<ApprovedWindowsCommand?> approvedWindowsCommand() async =>
+      ApprovedWindowsCommand.decode(
+          await _secureStore.readApprovedWindowsCommand());
+
+  Future<void> saveApprovedWindowsCommand(ApprovedWindowsCommand? command) =>
+      _secureStore.writeApprovedWindowsCommand(command?.encode());
+
+  Future<String> _executeWindowsCommand(RemoteCommand query) async {
+    final server = _tools;
+    final preset =
+        query == RemoteCommand.approved ? await approvedWindowsCommand() : null;
+    if (!identical(_tools, server) || server?.commandsEnabled != true) {
+      return '被控端已关闭远程命令。';
+    }
+    return RemoteCommand.runOnWindows(query, approved: preset);
+  }
+
   Future<bool> commandsEnabled() async =>
       (await SharedPreferences.getInstance()).getBool(_commandKey) ?? false;
 
@@ -363,7 +380,7 @@ class FileTransferHost {
         _tools = HostToolsServer(
           code: toolsSecret,
           readDiagnostics: _diagnostics,
-          runCommand: RemoteCommand.runOnWindows,
+          runCommand: _executeWindowsCommand,
           readHardware: HostHardware.readWindows,
           sendWake: WakeOnLan.send,
           streaming: () =>
