@@ -325,7 +325,7 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
             ListTile(
               leading: const Icon(Icons.manage_accounts_outlined),
               title: const Text('打开 Sunshine 管理页'),
-              subtitle: const Text('首次配置或忘记账号时使用'),
+              subtitle: const Text('可配置账号和串流显示器。切换显示器后请重新连接。'),
               trailing: const Icon(Icons.open_in_new, size: 17),
               onTap: _busy
                   ? null

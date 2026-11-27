@@ -87,6 +87,7 @@ Sunshine `v2026.914.233613` 的已配对客户端及应用忙碌状态无法判�
 按 F09 → F12 执行。各项开发和自动验证按顺序推进，真机验收按统一验收安排执行。
 
 - [ ] **F09 多显示器切换。** 核实当前 Moonlight Qt 的显示器参数，可用时提供连接前选择主屏、副屏或全部以及连接中切换。补测试并真机验证副屏可显示、可操作。
+  - 可行性核查（2026-11-28）：已检查 [Moonlight Qt v6.2.0 的 stream CLI](https://github.com/moonlight-stream/moonlight-qt/blob/v6.2.0/app/cli/commandlineparser.cpp)。`--display-mode` 管控制端窗口显示模式，CLI 没有被控屏幕选择参数。在被控机打开 Sunshine 管理页，可按 [该版本的 `output_name` 配置](https://github.com/SunshineStream/Sunshine/blob/v2026.914.233613/docs/configuration.md#output_name)选择副屏后重新连接。当前打包版本只能按此方式验收副屏，不提供连接中切换或全部屏幕。
 - [ ] **F10 剪贴板同步。** 实测 Moonlight Windows 的自带能力。够用就记录实测结果；不够用则补文本同步，图片按现有能力决定。用测试和真机验证两端双向复制粘贴。
 - [ ] **F11 远程 CMD。** 被控端单独开启，默认关闭。按 PRD 验收命令执行、文字回显，以及关闭时拒绝。用实验室电脑验证一条查看命令的回显。
 - [ ] **F12 被控端硬件信息。** 通过托盘伴侣向控制端设备页提供 CPU、内存、磁盘、系统版本。补测试并真机比对。
