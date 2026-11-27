@@ -16,7 +16,7 @@
 ; after install) so LULU's first-run wizard can re-run them later if
 ; a component failed or was removed.
 ;
-#define AppVersion "0.1.3"
+#define AppVersion "0.1.4"
 #define MoonlightSetup "MoonlightSetup-6.2.0.exe"
 
 [Setup]
