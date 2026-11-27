@@ -14,7 +14,7 @@
 ## 阶段 0：准备
 
 - [x] 通读 PRD v1.0 并确认 F01–F12 的需求、验收标准，以及第 6 节排除的六项功能。PRD 文件页眉仍写「待审核」，以用户本次确认作为审核结果。
-- [ ] 通读 `lulu-remote-privacy-lock-prompt.md` 和 `lulu-remote-online-activation-prompt.md`。截至 2026-11-27，在仓库和本机用户目录中未找到这两份文件。阶段 1 的 F01–F03 以原设计文件为准。
+- [x] 通读 `lulu-remote-privacy-lock-prompt.md` 和 `lulu-remote-online-activation-prompt.md`。已核对隐私屏、自动锁屏、激活服务及离线验证的范围和验收条件。阶段 1 的 F01–F03 以原设计文件为准。
 - [x] 本地环境验证。开始工作时 `main` 和 `origin/main` 都在 `b39e9d3`，双方领先与落后均为 0，工作区干净。Flutter 3.22.3 / Dart 3.4.4 下，`flutter analyze` 无问题，18 项 `flutter test` 全通过。
 - [x] 建立根目录 `CHANGELOG.md`，每个历史版本一行，含版本号、日期和变更摘要。已核对 GitHub 发布记录和 Git 标签。
 
