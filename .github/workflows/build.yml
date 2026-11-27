@@ -183,6 +183,9 @@ jobs:
           Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/jrsoftware/issrc/is-6_7_1/Files/Languages/Unofficial/ChineseSimplified.isl' -OutFile $language
       - name: Build Windows installers
         run: ./installer/scripts/build-installers.ps1
+      - name: Check installer failure and clean client install
+        shell: pwsh
+        run: ./installer/tests/test-installer-results.ps1 -TestClientInstaller
       - name: Build portable Windows ZIP
         run: ./installer/scripts/build-portable.ps1
       - name: Upload Windows packages
