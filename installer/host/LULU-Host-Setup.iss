@@ -16,7 +16,7 @@
 ;   2. iscc installer\host\LULU-Host-Setup.iss
 ;
 
-#define AppVersion "0.1.6"
+#define AppVersion "0.2.0"
 
 [Setup]
 AppId={{8D4E3B2C-5F6A-4E7B-8C9D-2F3E4A5B6C7D}

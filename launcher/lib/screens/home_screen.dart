@@ -39,11 +39,22 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _connectingId;
   bool _loading = true;
   bool _saving = false;
+  Timer? _statusTimer;
+  int _statusRefresh = 0;
 
   @override
   void initState() {
     super.initState();
-    _load();
+    unawaited(_load());
+    _statusTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      unawaited(_refreshStatus());
+    });
+  }
+
+  @override
+  void dispose() {
+    _statusTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -57,11 +68,32 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _refreshStatus() async {
-    final next = <String, HostStatus>{};
-    for (final device in _devices) {
-      next[device.id] = await _mesh.check(device);
+    if (_devices.isEmpty || _connectingId != null) return;
+    final devices = _devices;
+    final refresh = ++_statusRefresh;
+    final entries = await Future.wait(devices.map((device) async {
+      return MapEntry(device.id, await _mesh.check(device));
+    }));
+    if (mounted && identical(devices, _devices) && refresh == _statusRefresh) {
+      setState(() => _status = Map.fromEntries(entries));
     }
-    if (mounted) setState(() => _status = next);
+  }
+
+  Future<void> _checkConnection(Device device) async {
+    ++_statusRefresh;
+    var status = await _mesh.check(device);
+    if (status != HostStatus.online && mounted) {
+      await Future<void>.delayed(const Duration(seconds: 1));
+      if (!mounted) return;
+      status = await _mesh.check(device);
+    }
+    if (!mounted) return;
+    setState(() => _status[device.id] = status);
+    if (status != HostStatus.online) {
+      throw MoonlightLaunchException(
+        '暂时连不上「${device.name}」。请确认对方电脑已开机、远程控制已开启，并检查连接地址。',
+      );
+    }
   }
 
   Future<void> _connect(Device device, {bool androidShortcut = false}) async {
@@ -93,9 +125,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _connectWindows(Device device) async {
-    if (await _mesh.check(device) != HostStatus.online) {
-      throw const MoonlightLaunchException('无法连接 Sunshine，请检查网络、组网地址和端口。');
-    }
+    await _checkConnection(device);
     if (!mounted) return;
     if (await _launcher.findMoonlightQt() == null) {
       _snack('首次连接，正在准备连接组件…');
@@ -151,10 +181,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _connectAndroid(Device device, {bool shortcut = false}) async {
-    if (await _mesh.check(device) != HostStatus.online) {
-      _snack('无法连接 Sunshine。请检查手机网络、组网地址和端口。');
-      return;
-    }
+    await _checkConnection(device);
     if (!mounted) return;
     final serverCertHex = await _secureStore.readServerCertHex(device.id);
     var opened = false;
@@ -309,7 +336,10 @@ class _HomeScreenState extends State<HomeScreen> {
       await save();
       final devices = await _deviceStore.load();
       if (!mounted) return;
-      setState(() => _devices = devices);
+      setState(() {
+        _devices = devices;
+        _status = {};
+      });
       await _refreshStatus();
     } catch (e) {
       _snack('更新电脑列表失败：$e');

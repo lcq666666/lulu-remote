@@ -22,6 +22,12 @@ import '../models/quality_preset.dart';
 class MoonlightLauncher {
   static const _channel = MethodChannel('lulu.remote/launch');
 
+  // Moonlight looks for portable.dat in its working directory. The bundled
+  // binary's folder contains that file, which would hide the user's existing
+  // Windows pairing records in Moonlight's normal profile.
+  static String get _windowsWorkingDirectory =>
+      File(Platform.resolvedExecutable).parent.path;
+
   Future<bool> isInstalled() async {
     if (Platform.isWindows) return await findMoonlightQt() != null;
     if (Platform.isAndroid) {
@@ -41,7 +47,7 @@ class MoonlightLauncher {
   Future<String?> findMoonlightQt() async {
     if (!Platform.isWindows) return null;
     final bundled = Directory(
-      '${File(Platform.resolvedExecutable).parent.path}\\vendor\\moonlight',
+      '$_windowsWorkingDirectory\\vendor\\moonlight',
     );
     if (await bundled.exists()) {
       await for (final entry
@@ -99,7 +105,7 @@ class MoonlightLauncher {
           '--absolute-mouse',
           '--keep-awake',
         ],
-        workingDirectory: File(exe).parent.path);
+        workingDirectory: _windowsWorkingDirectory);
   }
 
   Future<void> quitWindows(Device device) async {
@@ -107,7 +113,8 @@ class MoonlightLauncher {
     if (exe == null) {
       throw const MoonlightNotInstalledException('没有找到 moonlight-qt.exe。');
     }
-    final result = await Process.run(exe, ['quit', device.meshAddress]);
+    final result = await Process.run(exe, ['quit', device.meshAddress],
+        workingDirectory: _windowsWorkingDirectory);
     if (result.exitCode != 0) {
       final error = (result.stderr as String).trim();
       throw MoonlightLaunchException(
@@ -121,7 +128,8 @@ class MoonlightLauncher {
     if (exe == null) {
       throw const MoonlightNotInstalledException('没有找到 moonlight-qt.exe。');
     }
-    final result = await Process.run(exe, ['list', device.meshAddress]);
+    final result = await Process.run(exe, ['list', device.meshAddress],
+        workingDirectory: _windowsWorkingDirectory);
     return result.stdout as String;
   }
 

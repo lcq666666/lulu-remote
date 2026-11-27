@@ -95,15 +95,17 @@ class MeshStatusService {
   }
 
   Future<HostStatus> check(Device device) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 3);
+    const timeout = Duration(seconds: 3);
+    final client = HttpClient()
+      ..connectionTimeout = timeout
+      ..findProxy = (_) => 'DIRECT';
     try {
-      final request = await client.getUrl(
-        Uri.parse('${device.nvhttpBase}/serverinfo?uniqueid=lulu-probe'),
-      );
-      final response = await request.close().timeout(
-            const Duration(seconds: 3),
-          );
-      await response.drain<void>();
+      final uri =
+          Uri.parse('${device.nvhttpBase}/serverinfo?uniqueid=lulu-probe');
+      final response = await client.getUrl(uri).then((request) {
+        request.followRedirects = false;
+        return request.close();
+      }).timeout(timeout);
       return response.statusCode == 200
           ? HostStatus.online
           : HostStatus.unreachable;
@@ -111,10 +113,10 @@ class MeshStatusService {
       return HostStatus.offline;
     } on HttpException {
       return HostStatus.unreachable;
-    } catch (_) {
-      return HostStatus.offline;
+    } on TimeoutException {
+      return HostStatus.unreachable;
     } finally {
-      client.close();
+      client.close(force: true);
     }
   }
 
