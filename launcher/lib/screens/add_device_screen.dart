@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../app.dart';
 import '../models/device.dart';
 import '../services/mesh_status_service.dart';
+import '../services/wake_on_lan.dart';
 import '../widgets/lulu_ui.dart';
 
 /// Add a host: name + mesh address. No password is asked here — the
@@ -27,6 +28,8 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
       TextEditingController(text: '${widget.device?.webPort ?? 47990}');
   late final _appController =
       TextEditingController(text: widget.device?.appName ?? 'Desktop');
+  late final _wakeMacController =
+      TextEditingController(text: widget.device?.wakeMac);
   late NetworkKind _network = widget.device?.network ?? NetworkKind.tailscale;
   String? _error;
 
@@ -36,6 +39,12 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
     final name = _nameController.text.trim();
     final address = _addressController.text.trim();
     final appName = _appController.text.trim();
+    final macText = _wakeMacController.text.trim();
+    final wakeMac = WakeOnLan.normalizeMac(macText);
+    if (macText.isNotEmpty && wakeMac == null) {
+      setState(() => _error = '请填写有效的有线网卡 MAC 地址，例如 00:11:22:33:44:55。');
+      return;
+    }
     final sunshinePort = int.tryParse(_sunshinePortController.text.trim());
     final webPort = int.tryParse(_webPortController.text.trim());
     if (address.isEmpty || appName.isEmpty) {
@@ -88,6 +97,7 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
         paired: sameApp && existing.paired,
         appId: sameApp ? existing.appId : null,
         hostUuid: sameHost ? existing.hostUuid : null,
+        wakeMac: wakeMac,
         lastSeen: sameHost ? existing.lastSeen : null,
       ),
     );
@@ -100,6 +110,7 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
     _sunshinePortController.dispose();
     _webPortController.dispose();
     _appController.dispose();
+    _wakeMacController.dispose();
     super.dispose();
   }
 
@@ -182,6 +193,19 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
               enabled: !_saving,
               decoration: const InputDecoration(labelText: '应用名'),
             ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _wakeMacController,
+              enabled: !_saving,
+              autocorrect: false,
+              style: LuluTheme.mono,
+              decoration: const InputDecoration(
+                labelText: '有线网卡 MAC 地址（远程开机，选填）',
+                hintText: '00:11:22:33:44:55',
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(WakeOnLan.help, style: TextStyle(fontSize: 12)),
           ],
         ),
         if (_error != null) ...[

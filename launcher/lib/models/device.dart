@@ -19,6 +19,7 @@ class Device {
     this.hostUuid,
     this.paired = false,
     this.lastSeen,
+    this.wakeMac,
   });
 
   factory Device.fromJson(Map<String, dynamic> json) => Device(
@@ -35,6 +36,7 @@ class Device {
         appId: json['appId'] as int?,
         hostUuid: json['hostUuid'] as String?,
         paired: json['paired'] as bool? ?? false,
+        wakeMac: json['wakeMac'] as String?,
         lastSeen: json['lastSeen'] == null
             ? null
             : DateTime.tryParse(json['lastSeen'] as String),
@@ -64,6 +66,8 @@ class Device {
   /// Android Game Intent and for ShortcutTrampoline.
   String? hostUuid;
 
+  final String? wakeMac;
+
   bool paired;
   DateTime? lastSeen;
 
@@ -88,6 +92,7 @@ class Device {
         'appId': appId,
         'hostUuid': hostUuid,
         'paired': paired,
+        if (wakeMac != null) 'wakeMac': wakeMac,
         'lastSeen': lastSeen?.toIso8601String(),
       };
 
@@ -103,6 +108,7 @@ class Device {
         hostUuid: hostUuid ?? this.hostUuid,
         paired: paired ?? this.paired,
         lastSeen: lastSeen,
+        wakeMac: wakeMac,
       );
 }
 
