@@ -14,15 +14,17 @@ class SunshineStreamEvidence {
 enum SunshineStreamFailure { launch, initialTimeout, networkTimeout }
 
 /// Reads the default Windows installation log after a polled stream ends.
-/// The timeout peer address is available for an immediate local lookup.
+/// A confirmed peer address is available for an immediate local lookup.
 /// Only the resulting peer name is retained in the connection history.
 class SunshineStreamLog {
   static const _maxBytes = 64 * 1024;
   static final _event = RegExp(
-      r'^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\]: (Info|Error): (.*)$');
+      r'^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\]: (Debug|Info|Error): (.*)$');
   static final _sessionCount =
       RegExp(r'^New streaming session started \[active sessions: (\d+)\]$');
   static final _timeout = RegExp(r'^([a-fA-F0-9:.]+): Ping Timeout$');
+  static final _controlPeer =
+      RegExp(r'^Control peer address \[([a-fA-F0-9:.]+):(\d{1,5})\]$');
 
   static Future<SunshineStreamEvidence?> read(
       DateTime sampledStart, DateTime sampledEnd) async {
@@ -74,6 +76,8 @@ class SunshineStreamLog {
     if (sampledEnd.isBefore(sampledStart)) return null;
     DateTime? launched;
     DateTime? connected;
+    InternetAddress? controlPeer;
+    var peerEvents = 0;
     SunshineStreamEvidence? result;
     for (final line in const LineSplitter().convert(text)) {
       final event = _event.firstMatch(line);
@@ -92,6 +96,23 @@ class SunshineStreamLog {
       }
       final start = launched;
       if (start == null || time.isBefore(start)) continue;
+      // Stock Sunshine emits this Debug event after identifying the incoming
+      // control connection and just before CLIENT CONNECTED. Use it only for
+      // an unambiguous single session. This does not enable debug logging.
+      if (level == 'Debug' &&
+          connected == null &&
+          result == null &&
+          message.startsWith('Control peer address [')) {
+        peerEvents++;
+        final match = _controlPeer.firstMatch(message);
+        final port = int.tryParse(match?.group(2) ?? '') ?? 0;
+        if (peerEvents == 1 && match != null && port > 0 && port <= 65535) {
+          controlPeer = InternetAddress.tryParse(match[1]!);
+        } else {
+          controlPeer = null;
+        }
+        continue;
+      }
       if (level == 'Info' && message == 'CLIENT CONNECTED') {
         if (connected != null || result != null) return null;
         connected = time;
@@ -111,7 +132,8 @@ class SunshineStreamLog {
         if (connected == null || result != null || time.isBefore(connected)) {
           return null;
         }
-        result = SunshineStreamEvidence(connected, time);
+        result =
+            SunshineStreamEvidence(connected, time, peerAddress: controlPeer);
       } else if (failure != null) {
         if (result != null || (connected != null && time.isBefore(connected))) {
           return null;

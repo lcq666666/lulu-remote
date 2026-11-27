@@ -20,6 +20,46 @@ void main() {
     expect(evidence.start, DateTime(2026, 11, 28, 12, 0, 3, 500));
     expect(evidence.end, DateTime(2026, 11, 28, 12, 0, 20));
     expect(evidence.failure, isNull);
+    expect(evidence.peerAddress, isNull);
+  });
+
+  test('uses an existing Debug address for an ordinary disconnect', () {
+    for (final address in ['100.64.12.1', 'fd7a:115c:a1e0::1234']) {
+      final evidence = parse([
+        launch,
+        _event('03.500', 'Control peer address [$address:60421]',
+            level: 'Debug'),
+        connect,
+        disconnect,
+      ])!;
+      expect(evidence.peerAddress?.address, address);
+      expect(evidence.failure, isNull);
+    }
+  });
+
+  test('rejects ambiguous, malformed and out-of-sequence peer events', () {
+    final peer = _event('03.200', 'Control peer address [100.64.12.1:60421]',
+        level: 'Debug');
+    for (final lines in [
+      [peer, launch, connect, disconnect],
+      [launch, connect, peer, disconnect],
+      [launch, peer, peer, connect, disconnect],
+      [
+        launch,
+        _event('03.200', 'Control peer address [100.64.12.1:65536]',
+            level: 'Debug'),
+        connect,
+        disconnect,
+      ],
+      [
+        launch,
+        _event('03.200', 'Control peer address [100.64.12.1:60421]'),
+        connect,
+        disconnect,
+      ],
+    ]) {
+      expect(parse(lines)!.peerAddress, isNull, reason: lines.join(' | '));
+    }
   });
 
   test('recovers a Sunshine network timeout with a typed failure code', () {

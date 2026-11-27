@@ -75,6 +75,34 @@ void main() {
     expect(ConnectionLog.exportText([row]), isNot(contains(peer.address)));
   });
 
+  test('stores a name but no address after an ordinary disconnect', () async {
+    final start = DateTime(2026, 11, 28, 12, 0, 4);
+    final end = DateTime(2026, 11, 28, 12, 0, 22);
+    var clock = start;
+    const peer = '100.64.12.1';
+    final log = ConnectionLog(
+      now: () => clock,
+      streamEvidence: (start, end) async => SunshineStreamLog.parse('''
+[2026-11-28 12:00:02.250]: Info: New streaming session started [active sessions: 1]
+[2026-11-28 12:00:03.500]: Debug: Control peer address [$peer:60421]
+[2026-11-28 12:00:03.500]: Info: CLIENT CONNECTED
+[2026-11-28 12:00:20.000]: Info: CLIENT DISCONNECTED
+''', start, end),
+      peerName: (address) async {
+        expect(address.address, peer);
+        return 'lab-pc';
+      },
+    );
+    await log.sessionSample(true);
+    clock = end;
+    await log.sessionSample(false);
+    final row = (await ConnectionLog().read()).single;
+    expect(row.outcome, ConnectionOutcome.completed);
+    expect(row.client, 'lab-pc');
+    expect(row.toJson().values, isNot(contains(peer)));
+    expect(ConnectionLog.exportText([row]), isNot(contains(peer)));
+  });
+
   test('captures known pairing outcomes and safely exports UTF-8 text',
       () async {
     final log = ConnectionLog();
