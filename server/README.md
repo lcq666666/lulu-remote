@@ -7,7 +7,7 @@ Windows 发布包提供同一个 Go 程序的两个文件名。`lulu-auth-<版�
 把程序放在常开的 Windows 电脑上，以运行服务的 Windows 帐号打开 PowerShell。把下例的本地程序路径和组网地址替换成这台机器的实际值。
 
 ```powershell
-$auth = 'C:\LuluAuth\lulu-auth-0.3.0-beta.2-windows-x64.exe'
+$auth = 'C:\LuluAuth\lulu-auth-<版本>-windows-x64.exe'
 $data = Join-Path $env:LOCALAPPDATA 'LuluActivation'
 $listen = '100.64.10.20:8765'
 & $auth --data-dir $data init
