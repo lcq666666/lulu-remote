@@ -11,6 +11,12 @@ class AutoLockService {
   static const _preferenceKey = 'lulu_auto_lock';
   final MethodChannel _channel;
   bool _hadActiveSession = false;
+  int _generation = 0;
+
+  void reset() {
+    _generation++;
+    _hadActiveSession = false;
+  }
 
   static Future<bool> isEnabled() async {
     final prefs = await SharedPreferences.getInstance();
@@ -41,7 +47,8 @@ class AutoLockService {
     // even if the OS rejected the request or the setting was off at the time.
     _hadActiveSession = false;
     try {
-      if (await isEnabled()) {
+      final generation = _generation;
+      if (await isEnabled() && generation == _generation) {
         await _channel.invokeMethod<void>('lockAfterStream');
       }
     } on Exception {

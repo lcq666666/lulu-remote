@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'screens/activation_screen.dart';
 import 'screens/home_screen.dart';
+import 'services/activation_service.dart';
 
 class LuluTheme {
   const LuluTheme._(this.isDark);
@@ -160,25 +162,139 @@ class LuluTheme {
 }
 
 class LuluApp extends StatefulWidget {
-  const LuluApp({super.key, this.navigatorKey});
+  const LuluApp(
+      {super.key,
+      this.navigatorKey,
+      this.activation,
+      this.onActivated,
+      this.onDeactivated});
 
   final GlobalKey<NavigatorState>? navigatorKey;
+  final ActivationService? activation;
+  final VoidCallback? onActivated;
+  final VoidCallback? onDeactivated;
 
   @override
   State<LuluApp> createState() => _LuluAppState();
 }
 
-class _LuluAppState extends State<LuluApp> {
+class _LuluAppState extends State<LuluApp> with WidgetsBindingObserver {
   static const _themeKey = 'lulu.theme';
   late final Future<SharedPreferences> _preferences;
   ThemeMode _mode = ThemeMode.dark;
   bool _changedByUser = false;
+  ActivationState? _activationState;
+  Timer? _reviewTimer;
+  final _navigator = GlobalKey<NavigatorState>();
+  bool _changingActivation = false;
 
   @override
   void initState() {
     super.initState();
     _preferences = SharedPreferences.getInstance();
     unawaited(_restoreTheme());
+    if (widget.activation != null) {
+      WidgetsBinding.instance.addObserver(this);
+      unawaited(_loadActivation());
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.onActivated?.call();
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _reviewTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) unawaited(_review());
+  }
+
+  Future<void> _loadActivation() async {
+    final state = await widget.activation!.load();
+    if (!mounted) return;
+    if (state.active) {
+      _activate(state);
+    } else {
+      setState(() => _activationState = state);
+      widget.onDeactivated?.call();
+    }
+  }
+
+  void _activate(ActivationState state) {
+    setState(() => _activationState = state);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !identical(_activationState, state)) return;
+      widget.onActivated?.call();
+      _reviewTimer?.cancel();
+      _reviewTimer = Timer.periodic(
+          const Duration(minutes: 5), (_) => unawaited(_review()));
+      unawaited(_review());
+    });
+  }
+
+  Future<void> _review() async {
+    final state = _activationState;
+    if (_changingActivation || state?.active != true) return;
+    if (await widget.activation!.checkRevocation() &&
+        mounted &&
+        identical(_activationState, state)) {
+      _leaveHome(ActivationState(
+          machine: state!.machine, error: ActivationError.revoked));
+    }
+  }
+
+  void _leaveHome(ActivationState state) {
+    _reviewTimer?.cancel();
+    widget.onDeactivated?.call();
+    (widget.navigatorKey ?? _navigator)
+        .currentState
+        ?.popUntil((route) => route.isFirst);
+    setState(() => _activationState = state);
+  }
+
+  Future<void> _resetActivation() async {
+    if (_changingActivation) return;
+    _changingActivation = true;
+    try {
+      await widget.activation!.reset();
+      if (mounted) {
+        _leaveHome(ActivationState(machine: _activationState?.machine));
+      }
+    } catch (_) {
+      final context = (widget.navigatorKey ?? _navigator).currentContext;
+      if (context != null && context.mounted) {
+        ScaffoldMessenger.maybeOf(context)
+            ?.showSnackBar(const SnackBar(content: Text('无法清除本机激活状态，请重试。')));
+      }
+    } finally {
+      _changingActivation = false;
+    }
+  }
+
+  Widget _home() {
+    final service = widget.activation;
+    final state = _activationState;
+    if (service != null && state?.active != true) {
+      if (state == null) {
+        return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      }
+      return ActivationScreen(
+          service: service,
+          state: state,
+          onActivated: _activate,
+          onRetry: _loadActivation);
+    }
+    return HomeScreen(
+        themeMode: _mode,
+        onThemeChanged: _setTheme,
+        machineSuffix: state?.machine?.code.split('-').last,
+        onResetActivation: service == null ? null : _resetActivation);
   }
 
   Future<void> _restoreTheme() async {
@@ -209,11 +325,11 @@ class _LuluAppState extends State<LuluApp> {
   @override
   Widget build(BuildContext context) => MaterialApp(
         title: 'LULU 远程',
-        navigatorKey: widget.navigatorKey,
+        navigatorKey: widget.navigatorKey ?? _navigator,
         theme: LuluTheme.lightTheme,
         darkTheme: LuluTheme.darkTheme,
         themeMode: _mode,
         debugShowCheckedModeBanner: false,
-        home: HomeScreen(themeMode: _mode, onThemeChanged: _setTheme),
+        home: _home(),
       );
 }

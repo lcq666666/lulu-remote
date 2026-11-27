@@ -16,6 +16,13 @@ class SecureStore {
   static String _key(String name, [String? deviceId]) =>
       deviceId == null ? 'lulu_$name' : 'lulu_${deviceId}_$name';
 
+  Future<String?> readActivationToken() =>
+      _storage.read(key: _key('activation_token'));
+  Future<void> writeActivationToken(String token) =>
+      _storage.write(key: _key('activation_token'), value: token);
+  Future<void> deleteActivationToken() =>
+      _storage.delete(key: _key('activation_token'));
+
   // --- LULU client identity (one identity for this launcher install) ---
   Future<String?> readClientCertPem() => _storage.read(key: _key('client_cert_pem'));
   Future<void> writeClientCertPem(String pem) =>

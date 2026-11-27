@@ -7,7 +7,7 @@
 
 | 组件 | 钉住版本 | 发布日期 | 许可 | 源码 / 发布页 | 怎么进安装包 |
 |---|---|---|---|---|---|
-| LULU 启动器（Flutter） | 0.3.0-beta.1（本仓库 `launcher/`，`pubspec.yaml`） | — | MIT（壳子） | 本仓库 | CI 编译 `flutter build windows`，exe + DLL + data 直接装进安装包 |
+| LULU 启动器（Flutter） | 0.3.0-beta.2（本仓库 `launcher/`，`pubspec.yaml`） | — | MIT（壳子） | 本仓库 | CI 编译 `flutter build windows`，exe + DLL + data 直接装进安装包 |
 | LULU 配对组件 | 随启动器构建 | — | GPL-3.0-only | 本仓库 `pairing_worker/` | Windows 安装器与便携版附独立 EXE。Android 同次构建提供单独 APK |
 | Moonlight Qt（Windows 控制端） | **v6.2.0** | 2026-10-04 | GPL-3.0 | https://github.com/moonlight-stream/moonlight-qt/releases/tag/v6.2.0 | CI 下载后**随包分发**：`vendor/moonlight` 中的可直接运行版；无法启动时，LULU 会尝试运行随包的 `MoonlightSetup-6.2.0.exe` |
 | Sunshine（Windows 被控端） | **v2026.914.233613** | 2026-09-14 | GPL-3.0 | https://github.com/LizardByte/Sunshine/releases/tag/v2026.914.233613（仓库已改名 SunshineStream/Sunshine，同一 release） | CI 下载后**随包分发**：`installer/vendor/Sunshine-Windows-AMD64-installer.msi`，在 LULU 开启远程控制时按需安装 |

@@ -26,10 +26,16 @@ typedef _HostCheck = ({HostStatus status, String detail, Duration elapsed});
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen(
-      {super.key, required this.themeMode, required this.onThemeChanged});
+      {super.key,
+      required this.themeMode,
+      required this.onThemeChanged,
+      this.machineSuffix,
+      this.onResetActivation});
 
   final ThemeMode themeMode;
   final ValueChanged<ThemeMode> onThemeChanged;
+  final String? machineSuffix;
+  final VoidCallback? onResetActivation;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -770,6 +776,34 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _preferences(bool windows) => Card(
           child: Column(children: [
+        if (widget.machineSuffix != null &&
+            widget.onResetActivation != null) ...[
+          ListTile(
+            title: Text('已激活 · ${widget.machineSuffix}'),
+            subtitle: const Text('更换密钥 / 重新激活'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () async {
+              final confirmed = await showDialog<bool>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                        title: const Text('重新激活？'),
+                        content: const Text('会清除本机的激活记录。再次进入主界面需要一枚新密钥。'),
+                        actions: [
+                          TextButton(
+                              onPressed: () => Navigator.pop(context, false),
+                              child: const Text('取消')),
+                          FilledButton(
+                              onPressed: () => Navigator.pop(context, true),
+                              child: const Text('重新激活')),
+                        ],
+                      ));
+              if (mounted && confirmed == true) {
+                widget.onResetActivation?.call();
+              }
+            },
+          ),
+          const Divider(),
+        ],
         if (windows) ...[
           Padding(
               padding: const EdgeInsets.all(16),
