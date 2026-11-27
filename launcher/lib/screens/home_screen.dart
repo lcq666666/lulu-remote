@@ -768,41 +768,65 @@ class _HomeScreenState extends State<HomeScreen> {
                         windows && constraints.maxWidth >= 520 ? 2 : 1;
                     final width =
                         (constraints.maxWidth - (columns - 1) * 16) / columns;
-                    return Wrap(spacing: 16, runSpacing: 16, children: [
-                      for (final device in _devices)
-                        SizedBox(
-                            key: ValueKey(device.id),
-                            width: width,
-                            child: DeviceCard(
-                              device: device,
-                              status: _status[device.id]?.status,
-                              responseTime: _status[device.id]?.elapsed,
-                              statusDetail: _status[device.id]?.detail,
-                              connecting: _connectingId == device.id,
-                              mobile: !windows,
-                              busy: _busy,
-                              onConnect: () => _connect(device),
-                              onWake: device.wakeMac == null
-                                  ? null
-                                  : () => _wake(device),
-                              waking: _waking.contains(device.id),
-                              onTransfer: () => showDialog<void>(
-                                context: context,
-                                barrierDismissible: false,
-                                builder: (_) =>
-                                    FileTransferDialog(device: device),
+                    final groups = <String, List<Device>>{};
+                    for (final device in _devices) {
+                      (groups[device.group] ??= []).add(device);
+                    }
+                    final showHeadings =
+                        groups.length > 1 || !groups.containsKey('');
+                    return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          for (final group in groups.entries) ...[
+                            if (showHeadings)
+                              Padding(
+                                padding:
+                                    const EdgeInsets.only(top: 8, bottom: 12),
+                                child: Text(
+                                    group.key.isEmpty ? '未分组' : group.key,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium),
                               ),
-                              onPower: (action) => _powerAction(device, action),
-                              onEdit: () => _openAddDevice(device),
-                              onDelete: () => _deleteDevice(device),
-                              onDisconnect: windows && device.paired
-                                  ? () => _disconnectWindows(device)
-                                  : null,
-                              onAndroidHelp: Platform.isAndroid
-                                  ? () => _showAndroidHelp(device)
-                                  : null,
-                            )),
-                    ]);
+                            Wrap(spacing: 16, runSpacing: 16, children: [
+                              for (final device in group.value)
+                                SizedBox(
+                                    key: ValueKey(device.id),
+                                    width: width,
+                                    child: DeviceCard(
+                                      device: device,
+                                      status: _status[device.id]?.status,
+                                      responseTime: _status[device.id]?.elapsed,
+                                      statusDetail: _status[device.id]?.detail,
+                                      connecting: _connectingId == device.id,
+                                      mobile: !windows,
+                                      busy: _busy,
+                                      onConnect: () => _connect(device),
+                                      onWake: device.wakeMac == null
+                                          ? null
+                                          : () => _wake(device),
+                                      waking: _waking.contains(device.id),
+                                      onTransfer: () => showDialog<void>(
+                                        context: context,
+                                        barrierDismissible: false,
+                                        builder: (_) =>
+                                            FileTransferDialog(device: device),
+                                      ),
+                                      onPower: (action) =>
+                                          _powerAction(device, action),
+                                      onEdit: () => _openAddDevice(device),
+                                      onDelete: () => _deleteDevice(device),
+                                      onDisconnect: windows && device.paired
+                                          ? () => _disconnectWindows(device)
+                                          : null,
+                                      onAndroidHelp: Platform.isAndroid
+                                          ? () => _showAndroidHelp(device)
+                                          : null,
+                                    )),
+                            ]),
+                            const SizedBox(height: 12),
+                          ],
+                        ]);
                   }),
               ],
             ),
