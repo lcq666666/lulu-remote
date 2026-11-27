@@ -28,6 +28,7 @@ class DeviceCard extends StatefulWidget {
       this.statusDetail,
       required this.connecting,
       required this.onConnect,
+      this.connectLabel,
       this.mobile = false,
       this.busy = false,
       this.onTransfer,
@@ -50,6 +51,7 @@ class DeviceCard extends StatefulWidget {
   final bool mobile;
   final bool busy;
   final VoidCallback onConnect;
+  final String? connectLabel;
   final VoidCallback? onTransfer;
   final VoidCallback? onClipboard;
   final VoidCallback? onDiagnostics;
@@ -241,9 +243,8 @@ class _DeviceCardState extends State<DeviceCard> {
                             ? '连接中…'
                             : canWake
                                 ? '开机'
-                                : widget.device.paired
-                                    ? '进入桌面'
-                                    : '首次连接',
+                                : widget.connectLabel ??
+                                    (widget.device.paired ? '进入桌面' : '首次连接'),
                     textAlign: TextAlign.center)),
           ]),
     );

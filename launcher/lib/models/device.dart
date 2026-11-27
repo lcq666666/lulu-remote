@@ -64,12 +64,10 @@ class Device {
   /// App to stream, by name for moonlight-qt (`stream <host> "Desktop"`).
   String appName;
 
-  /// Numeric app id from /applist, resolved after pairing. Needed for the
-  /// Android Game Intent; null until pairing has fetched the applist.
+  /// Numeric app id from /applist, when available after in-app pairing.
   int? appId;
 
-  /// Host UUID from /serverinfo, resolved after pairing. Needed for the
-  /// Android Game Intent and for ShortcutTrampoline.
+  /// Host UUID recorded during in-app pairing, when available.
   String? hostUuid;
 
   final String? wakeMac;

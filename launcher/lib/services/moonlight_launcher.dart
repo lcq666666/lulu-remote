@@ -79,55 +79,19 @@ class MoonlightLauncher {
     await client.quit(device);
   }
 
-  /// One-tap connect on Android.
-  ///
-  /// [useOwnCert] picks the Game Intent path (LULU's own pairing cert).
-  /// It is an UNVERIFIED prototype — see MainActivity.kt and BUILD.md §4.
-  /// When false, or when the Game Intent fails, call [launchShortcut]
-  /// instead (Moonlight's own pairing only).
-  Future<bool> streamAndroid(
-    Device device, {
-    required bool useOwnCert,
-    required List<int> serverCertDer,
-  }) async {
-    if (device.hostUuid == null || device.appId == null) {
-      throw const NotPairedException(
-        '缺少 UUID 或应用 ID，请先配对并读取应用列表。',
-      );
-    }
-    try {
-      final ok = await _channel.invokeMethod<bool>('launchGame', {
-        'host': device.meshAddress,
-        'port': device.sunshinePort,
-        'httpsPort': device.webPort - 6, // 47984 when base is 47989
-        'appName': device.appName,
-        'appId': device.appId,
-        'uuid': device.hostUuid,
-        'pcName': device.name,
-        'hdr': false,
-        'serverCert': serverCertDer,
-      });
-      return ok ?? false;
-    } on PlatformException catch (e) {
-      throw MoonlightLaunchException('拉起 Moonlight 失败：${e.message}');
-    }
-  }
+  Future<bool> openAndroid() async =>
+      await _channel.invokeMethod<bool>('openMoonlight') ?? false;
 
-  /// Fallback: ShortcutTrampoline Intent. Works only if this PC was
-  /// paired inside Moonlight itself (Moonlight's cert, not LULU's).
-  Future<bool> launchShortcut(Device device) async {
-    if (device.hostUuid == null || device.appId == null) {
-      throw const NotPairedException('缺少 UUID 或应用 ID。');
-    }
-    try {
-      final ok = await _channel.invokeMethod<bool>('launchShortcut', {
-        'uuid': device.hostUuid,
-        'appId': device.appId,
-      });
-      return ok ?? false;
-    } on PlatformException catch (e) {
-      throw MoonlightLaunchException('拉起 Moonlight 失败：${e.message}');
-    }
+  /// Moonlight resolves the host and uses its own pairing credentials.
+  /// A true return value indicates that Android accepted the launch request.
+  Future<bool> launchAndroidShortcut(Device device, String hostUuid) async {
+    final appId = device.appId;
+    return await _channel.invokeMethod<bool>('launchShortcut', {
+          'uuid': hostUuid,
+          'appName': device.appName,
+          if (appId != null && appId > 0) 'appId': appId,
+        }) ??
+        false;
   }
 }
 
@@ -240,13 +204,6 @@ Future<_CommandResult> _runCommand(
 
 class MoonlightNotInstalledException implements Exception {
   const MoonlightNotInstalledException(this.message);
-  final String message;
-  @override
-  String toString() => message;
-}
-
-class NotPairedException implements Exception {
-  const NotPairedException(this.message);
   final String message;
   @override
   String toString() => message;

@@ -97,7 +97,8 @@ class MeshStatusService {
   Future<HostStatus> check(Device device) async =>
       (await diagnose(device)).status;
 
-  Future<({HostStatus status, String detail})> diagnose(Device device) async {
+  Future<({HostStatus status, String detail, String? hostUuid})> diagnose(
+      Device device) async {
     const timeout = Duration(seconds: 4);
     final client = HttpClient()
       ..connectionTimeout = timeout
@@ -116,6 +117,7 @@ class MeshStatusService {
         if (response.statusCode != HttpStatus.ok) {
           return (
             status: HostStatus.unreachable,
+            hostUuid: null,
             detail: '远程服务返回 HTTP ${response.statusCode}。',
           );
         }
@@ -126,31 +128,54 @@ class MeshStatusService {
             info.getElement('appversion') == null) {
           throw const FormatException('Invalid serverinfo');
         }
-        return (status: HostStatus.online, detail: '');
+        final reportedUuid = info.getElement('uniqueid')?.innerText.trim();
+        final validUuid = RegExp(
+          r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+          caseSensitive: false,
+        );
+        return (
+          status: HostStatus.online,
+          detail: '',
+          hostUuid: reportedUuid != null && validUuid.hasMatch(reportedUuid)
+              ? reportedUuid
+              : null,
+        );
       })()
           .timeout(timeout);
     } on SocketException catch (error) {
       return connectionRefused(error)
-          ? (status: HostStatus.offline, detail: '连接被拒绝，请确认对方已开启远程控制。')
-          : (status: HostStatus.unreachable, detail: '网络无法连接，请核对地址和双方的组网状态。');
+          ? (
+              status: HostStatus.offline,
+              hostUuid: null,
+              detail: '连接被拒绝，请确认对方已开启远程控制。'
+            )
+          : (
+              status: HostStatus.unreachable,
+              hostUuid: null,
+              detail: '网络无法连接，请核对地址和双方的组网状态。'
+            );
     } on TimeoutException {
       return (
         status: HostStatus.unreachable,
+        hostUuid: null,
         detail: '远程服务在 4 秒内没有回应，请确认对方已开机，双方组网已连接。'
       );
     } on HttpException {
       return (
         status: HostStatus.unreachable,
+        hostUuid: null,
         detail: '未收到完整的远程服务响应，请核对地址和连接端口。'
       );
     } on FormatException {
       return (
         status: HostStatus.unreachable,
+        hostUuid: null,
         detail: '该端口没有返回 Sunshine 设备信息，请核对连接端口。'
       );
     } on XmlException {
       return (
         status: HostStatus.unreachable,
+        hostUuid: null,
         detail: '该端口没有返回 Sunshine 设备信息，请核对连接端口。'
       );
     } finally {
