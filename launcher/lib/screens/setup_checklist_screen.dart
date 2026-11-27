@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../app.dart';
 import '../services/component_installer.dart';
 import '../services/host_setup_service.dart';
+import '../widgets/lulu_ui.dart';
 
 /// Setup checklist: what is installed, what is missing, and the fix.
 ///
@@ -26,7 +27,15 @@ import '../services/host_setup_service.dart';
 /// (or the LULU-Host-Setup installer, which does the same steps) —
 /// the checklist shows the exact command to run it on the remote PC.
 class SetupChecklistScreen extends StatefulWidget {
-  const SetupChecklistScreen({super.key});
+  const SetupChecklistScreen(
+      {super.key,
+      this.embedded = false,
+      this.showTitle = true,
+      this.preferences});
+
+  final bool embedded;
+  final bool showTitle;
+  final Widget? preferences;
 
   @override
   State<SetupChecklistScreen> createState() => _SetupChecklistScreenState();
@@ -37,6 +46,8 @@ class _SetupChecklistScreenState extends State<SetupChecklistScreen> {
   final _installer = ComponentInstaller();
   List<SetupCheck>? _checks;
   bool _installing = false;
+  bool _checking = false;
+  String? _checkError;
   String? _installResult;
 
   @override
@@ -46,8 +57,19 @@ class _SetupChecklistScreenState extends State<SetupChecklistScreen> {
   }
 
   Future<void> _run() async {
-    final checks = await _service.runChecks();
-    if (mounted) setState(() => _checks = checks);
+    if (_checking) return;
+    setState(() {
+      _checking = true;
+      _checkError = null;
+    });
+    try {
+      final checks = await _service.runChecks();
+      if (mounted) setState(() => _checks = checks);
+    } catch (_) {
+      if (mounted) setState(() => _checkError = '检测未完成，请重新检测。');
+    } finally {
+      if (mounted) setState(() => _checking = false);
+    }
   }
 
   Future<void> _installMissing() async {
@@ -55,17 +77,16 @@ class _SetupChecklistScreenState extends State<SetupChecklistScreen> {
       _installing = true;
       _installResult = null;
     });
-    final result = await _installer.installMissing();
-    if (!mounted) return;
-    setState(() {
-      _installing = false;
-      _installResult = result;
-    });
-    await _run();
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('安装已跑完，上面是每项的结果。')),
-      );
+    try {
+      final result = await _installer.installMissing();
+      if (!mounted) return;
+      setState(() => _installResult = result);
+      await _run();
+      if (mounted) showLuluSnack(context, '安装已完成，可查看每项结果。');
+    } catch (_) {
+      if (mounted) setState(() => _installResult = '安装未完成，请重试。');
+    } finally {
+      if (mounted) setState(() => _installing = false);
     }
   }
 
@@ -98,132 +119,192 @@ class _SetupChecklistScreenState extends State<SetupChecklistScreen> {
     if (mounted && selected != null) await _openAndroidStore(selected);
   }
 
+  static const _hostCommand = 'powershell -ExecutionPolicy Bypass -File '
+      'scripts\\host-setup\\install-sunshine.ps1';
+
   @override
   Widget build(BuildContext context) {
+    final theme = LuluTheme.of(context);
+    final android = Platform.isAndroid;
+    final checks = _checks ?? const <SetupCheck>[];
     final missing =
-        (_checks ?? []).where((c) => c.ok == false && !c.optional).toList();
-    return Scaffold(
-      appBar: AppBar(title: const Text('设置检查清单')),
-      body: _checks == null
-          ? const Center(child: CircularProgressIndicator())
-          : ListView(
-              padding: const EdgeInsets.all(16),
+        checks.where((check) => check.ok == false && !check.optional).toList();
+    final content = Align(
+      alignment:
+          widget.embedded && !android ? Alignment.topLeft : Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 804),
+        child: ListView(
+          padding: android
+              ? const EdgeInsets.fromLTRB(16, 10, 16, 20)
+              : const EdgeInsets.fromLTRB(32, 28, 32, 24),
+          children: [
+            if (widget.embedded && widget.showTitle) ...[
+              const Text('连接设置',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 16),
+            ],
+            Card(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                  Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                      child: Row(children: [
+                        const Expanded(
+                            child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                              Text('连接诊断',
+                                  style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600)),
+                            ])),
+                        OutlinedButton.icon(
+                          onPressed: _checking || _installing ? null : _run,
+                          icon: _checking
+                              ? const SizedBox.square(
+                                  dimension: 14,
+                                  child:
+                                      CircularProgressIndicator(strokeWidth: 2))
+                              : const Icon(Icons.refresh, size: 16),
+                          label: const Text('重新检测'),
+                        ),
+                      ])),
+                  if (_checking) const LinearProgressIndicator(minHeight: 2),
+                  if (_checkError != null)
+                    Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Text(_checkError!,
+                            style: TextStyle(color: theme.warning))),
+                  for (final check in checks) ...[
+                    const Divider(),
+                    _checkRow(check, theme, android),
+                  ],
+                  if (missing.isNotEmpty) ...[
+                    const Divider(),
+                    Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              FilledButton.icon(
+                                onPressed: _checking || _installing
+                                    ? null
+                                    : android
+                                        ? () => _chooseAndroidComponent(missing)
+                                        : _installMissing,
+                                icon: _installing
+                                    ? const SizedBox.square(
+                                        dimension: 14,
+                                        child: CircularProgressIndicator(
+                                            strokeWidth: 2))
+                                    : const Icon(Icons.download_outlined,
+                                        size: 17),
+                                label: Text(_installing
+                                    ? '正在安装…'
+                                    : android
+                                        ? '打开商店安装组件'
+                                        : '一键安装缺失组件'),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                  android
+                                      ? '打开 Play 商店后，在商店中确认安装。'
+                                      : '每个组件安装前，Windows 会弹出管理员确认。',
+                                  style: TextStyle(
+                                      color: theme.muted, fontSize: 12)),
+                            ])),
+                  ],
+                  if (_installResult != null) ...[
+                    const Divider(),
+                    Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Text(_installResult!)),
+                  ],
+                ])),
+            if (widget.preferences != null) ...[
+              const SizedBox(height: 16),
+              widget.preferences!,
+            ],
+            const SizedBox(height: 16),
+            Card(
+                child: ExpansionTile(
+              leading: const Icon(Icons.desktop_windows_outlined, size: 18),
+              title: const Text('远端电脑配置',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              expandedCrossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (missing.isNotEmpty) ...[
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: _installing
-                          ? null
-                          : Platform.isAndroid
-                              ? () => _chooseAndroidComponent(missing)
-                              : _installMissing,
-                      icon: _installing
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.download),
-                      label: Text(_installing
-                          ? '正在安装，请稍等…'
-                          : Platform.isAndroid
-                              ? '一键打开安装（Moonlight / Tailscale）'
-                              : '一键安装缺失组件'),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    Platform.isAndroid
-                        ? '选一个组件打开 Play 商店，安装后返回这里打开另一项。'
-                        : '点一下就装好缺的组件，每装一个会弹一次管理员确认，'
-                            '不用你再去各家官网下载。',
-                    style:
-                        const TextStyle(color: LuluTheme.muted, fontSize: 12),
-                  ),
-                  const SizedBox(height: 8),
-                ],
-                if (_installResult != null) ...[
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: LuluTheme.surface,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: LuluTheme.border),
-                    ),
-                    child: Text(_installResult!),
-                  ),
-                  const SizedBox(height: 8),
-                ],
-                for (final check in _checks!) ...[
-                  ListTile(
-                    leading: Icon(
-                      check.ok == null
-                          ? Icons.help_outline
-                          : check.ok!
-                              ? Icons.check_circle
-                              : Icons.error_outline,
-                      color: check.ok == null
-                          ? LuluTheme.muted
-                          : check.ok!
-                              ? LuluTheme.accent
-                              : Colors.redAccent,
-                    ),
-                    title: Text(check.title),
-                    subtitle: Text(check.detail),
-                    trailing: check.fixUrl == null || check.ok == true
-                        ? null
-                        : TextButton(
-                            onPressed: Platform.isAndroid
-                                ? () => _openAndroidStore(check)
-                                : () => _service.openFix(check),
-                            child: const Text('去下载'),
-                          ),
-                  ),
-                  const Divider(color: LuluTheme.border),
-                ],
+                Text(
+                    '可在远端电脑运行 LULU-Host-Setup 安装包，或用管理员 PowerShell 运行仓库中的主机配置脚本。',
+                    style: TextStyle(fontSize: 13, color: theme.muted)),
                 const SizedBox(height: 8),
-                const Text(
-                  '远端电脑一键配置（在远端电脑上用管理员 PowerShell 运行）：',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 8),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: LuluTheme.surface,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: LuluTheme.border),
-                  ),
-                  child: const SelectableText(
-                    'powershell -ExecutionPolicy Bypass -File '
-                    'scripts\\host-setup\\install-sunshine.ps1',
-                    style: TextStyle(fontFamily: 'monospace'),
-                  ),
-                ),
-                const SizedBox(height: 8),
+                SelectableText(_hostCommand,
+                    style: LuluTheme.mono.copyWith(fontSize: 12)),
                 TextButton.icon(
-                  onPressed: () {
-                    Clipboard.setData(const ClipboardData(
-                      text:
-                          'powershell -ExecutionPolicy Bypass -File scripts\\host-setup\\install-sunshine.ps1',
-                    ));
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('已复制命令。')),
-                    );
+                  onPressed: () async {
+                    await Clipboard.setData(
+                        const ClipboardData(text: _hostCommand));
+                    if (context.mounted) {
+                      showLuluSnack(context, '已复制命令。', success: true);
+                    }
                   },
-                  icon: const Icon(Icons.copy),
+                  icon: const Icon(Icons.copy_outlined, size: 16),
                   label: const Text('复制命令'),
                 ),
-                const Text(
-                  '这个脚本用 winget 装 Sunshine 和 Tailscale、放行防火墙端口、'
-                  '并打开 Sunshine 网页让管理员创建账号。脚本本身没有经过真机运行，'
-                  '第一次请在远端电脑上看着它跑完。更省事的做法：在远端电脑上直接'
-                  '运行 LULU-Host-Setup 安装包，上面这些步骤它都包了。',
-                  style: TextStyle(color: LuluTheme.muted, fontSize: 12),
-                ),
               ],
+            )),
+          ],
+        ),
+      ),
+    );
+    return widget.embedded
+        ? content
+        : Scaffold(appBar: AppBar(title: const Text('连接设置')), body: content);
+  }
+
+  Widget _checkRow(SetupCheck check, LuluTheme theme, bool android) {
+    final (label, icon, color) = switch (check.ok) {
+      true => ('正常', Icons.check_circle_outline, theme.success),
+      false when android => ('待确认', Icons.info_outline, theme.muted),
+      false => (
+          check.optional ? '未安装' : '需安装',
+          Icons.error_outline,
+          check.optional ? theme.muted : theme.warning
+        ),
+      null => ('待确认', Icons.info_outline, theme.muted),
+    };
+    final canFix = check.fixUrl != null && check.ok != true;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Expanded(
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(check.title,
+              style:
+                  const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 3),
+          Text(check.detail,
+              style: TextStyle(color: theme.muted, fontSize: 12)),
+          if (canFix)
+            TextButton(
+              onPressed: _installing
+                  ? null
+                  : () async {
+                      if (android) {
+                        await _openAndroidStore(check);
+                      } else {
+                        await _service.openFix(check);
+                      }
+                    },
+              child: const Text('去下载'),
             ),
+        ])),
+        const SizedBox(width: 8),
+        LuluBadge(label: label, icon: icon, color: color),
+      ]),
     );
   }
 }

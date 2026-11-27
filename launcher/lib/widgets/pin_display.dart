@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../app.dart';
 
-/// The code for the current pairing request.
+/// The four digits supplied by the real pairing request.
 class PinDisplay extends StatelessWidget {
   const PinDisplay({super.key, required this.pin, this.subtitle});
 
@@ -11,39 +11,43 @@ class PinDisplay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: LuluTheme.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: LuluTheme.border),
+    final theme = LuluTheme.of(context);
+    return Column(children: [
+      Semantics(
+        label: '配对 PIN 码 ${pin.split('').join(' ')}',
+        excludeSemantics: true,
+        child: Center(
+            child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 260),
+          child: Row(children: [
+            for (final (index, digit) in pin.split('').indexed) ...[
+              if (index > 0) const SizedBox(width: 12),
+              Expanded(
+                  child: Container(
+                height: 62,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                    color: theme.background,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                        color:
+                            theme.isDark ? theme.border : theme.hoverBorder)),
+                child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(digit,
+                        style: LuluTheme.mono.copyWith(
+                            fontSize: 28, fontWeight: FontWeight.w600))),
+              )),
+            ],
+          ]),
+        )),
       ),
-      child: Column(
-        children: [
-          const Text(
-            '四位配对码',
-            style: TextStyle(color: LuluTheme.muted),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            pin.split('').join(' '),
-            style: const TextStyle(
-              fontSize: 44,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 4,
-              color: LuluTheme.accent,
-            ),
-          ),
-          if (subtitle != null) ...[
-            const SizedBox(height: 8),
-            Text(
-              subtitle!,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: LuluTheme.muted),
-            ),
-          ],
-        ],
-      ),
-    );
+      if (subtitle != null) ...[
+        const SizedBox(height: 16),
+        Text(subtitle!,
+            textAlign: TextAlign.center,
+            style: TextStyle(color: theme.muted, fontSize: 13)),
+      ],
+    ]);
   }
 }

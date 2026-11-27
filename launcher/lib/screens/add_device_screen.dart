@@ -3,13 +3,15 @@ import 'package:flutter/material.dart';
 import '../app.dart';
 import '../models/device.dart';
 import '../services/mesh_status_service.dart';
+import '../widgets/lulu_ui.dart';
 
 /// Add a host: name + mesh address. No password is asked here — the
 /// Sunshine admin password is entered on the pairing screen, once.
 class AddDeviceScreen extends StatefulWidget {
-  const AddDeviceScreen({super.key, this.device});
+  const AddDeviceScreen({super.key, this.device, this.dialog = false});
 
   final Device? device;
+  final bool dialog;
 
   @override
   State<AddDeviceScreen> createState() => _AddDeviceScreenState();
@@ -103,90 +105,106 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text(widget.device == null ? '添加电脑' : '编辑电脑')),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 580),
-          child: ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              TextField(
-                controller: _nameController,
-                decoration: const InputDecoration(
-                  labelText: '电脑名称（选填）',
-                  hintText: '比如：远程电脑一',
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _addressController,
-                decoration: const InputDecoration(
-                  labelText: '对方电脑的地址',
-                  hintText: '例如 192.168.1.23',
-                  helperText: '请对方在 LULU 的「让别人连接我」中复制地址。',
-                  helperMaxLines: 2,
-                ),
-              ),
-              const SizedBox(height: 12),
-              ExpansionTile(
-                title: const Text('高级设置'),
-                initiallyExpanded: widget.device != null &&
-                    (widget.device!.sunshinePort != 47989 ||
-                        widget.device!.webPort != 47990 ||
-                        widget.device!.appName != 'Desktop' ||
-                        widget.device!.network != NetworkKind.tailscale),
-                children: [
-                  DropdownButtonFormField<NetworkKind>(
-                    value: _network,
-                    decoration: const InputDecoration(labelText: '跨网连接方式'),
-                    items: NetworkKind.values
-                        .map(
-                          (kind) => DropdownMenuItem(
-                            value: kind,
-                            child: Text(kind.label),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (value) {
+    final theme = LuluTheme.of(context);
+    final address = TextField(
+      controller: _addressController,
+      enabled: !_saving,
+      autocorrect: false,
+      keyboardType: TextInputType.url,
+      style: LuluTheme.mono,
+      decoration: const InputDecoration(
+          labelText: '组网 / 局域网地址', hintText: '192.168.1.23'),
+    );
+    final port = TextField(
+      controller: _sunshinePortController,
+      enabled: !_saving,
+      keyboardType: TextInputType.number,
+      style: LuluTheme.mono,
+      decoration: const InputDecoration(labelText: '端口'),
+    );
+    return LuluFormFrame(
+      title: widget.device == null ? '添加电脑' : '编辑电脑',
+      icon: Icons.desktop_windows_outlined,
+      dialog: widget.dialog,
+      children: [
+        TextField(
+          controller: _nameController,
+          enabled: !_saving,
+          decoration: const InputDecoration(
+              labelText: '电脑名称（选填）', hintText: '例如：实验室主机'),
+        ),
+        const SizedBox(height: 16),
+        LayoutBuilder(builder: (context, constraints) {
+          if (constraints.maxWidth < 290 ||
+              MediaQuery.textScalerOf(context).scale(13) > 17) {
+            return Column(
+                children: [address, const SizedBox(height: 12), port]);
+          }
+          return Row(children: [
+            Expanded(child: address),
+            const SizedBox(width: 12),
+            SizedBox(width: 100, child: port)
+          ]);
+        }),
+        const SizedBox(height: 8),
+        Text('请对方在 LULU 的「让别人连接我」中复制地址。',
+            style: TextStyle(color: theme.muted, fontSize: 12)),
+        const SizedBox(height: 12),
+        ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          title: const Text('高级设置', style: TextStyle(fontSize: 13)),
+          childrenPadding: const EdgeInsets.only(bottom: 12),
+          children: [
+            DropdownButtonFormField<NetworkKind>(
+              value: _network,
+              decoration: const InputDecoration(labelText: '组网类型'),
+              items: [
+                for (final network in NetworkKind.values)
+                  DropdownMenuItem(value: network, child: Text(network.label))
+              ],
+              onChanged: _saving
+                  ? null
+                  : (value) {
                       if (value != null) setState(() => _network = value);
                     },
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    '同一个 Wi-Fi 下可直接用局域网地址。',
-                    style: TextStyle(color: LuluTheme.muted, fontSize: 12),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _sunshinePortController,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(labelText: '远程连接端口'),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _webPortController,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(labelText: '管理端口'),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _appController,
-                    decoration: const InputDecoration(labelText: '串流应用名'),
-                  ),
-                ],
-              ),
-              if (_error != null) ...[
-                const SizedBox(height: 12),
-                Text(_error!, style: const TextStyle(color: Colors.redAccent)),
-              ],
-              const SizedBox(height: 16),
-              ElevatedButton(
-                  onPressed: _saving ? null : _save, child: const Text('保存')),
-            ],
-          ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _webPortController,
+              enabled: !_saving,
+              keyboardType: TextInputType.number,
+              style: LuluTheme.mono,
+              decoration: const InputDecoration(labelText: 'Sunshine 网页端口'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _appController,
+              enabled: !_saving,
+              decoration: const InputDecoration(labelText: '应用名'),
+            ),
+          ],
         ),
-      ),
+        if (_error != null) ...[
+          const SizedBox(height: 8),
+          Text(_error!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error)),
+        ],
+        const SizedBox(height: 12),
+        const Divider(),
+        const SizedBox(height: 12),
+        Wrap(
+            alignment: WrapAlignment.end,
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton(
+                  onPressed: _saving ? null : () => Navigator.pop(context),
+                  child: const Text('取消')),
+              FilledButton(
+                  onPressed: _saving ? null : _save,
+                  child: Text(_saving ? '正在检查…' : '保存电脑')),
+            ]),
+      ],
     );
   }
 }
