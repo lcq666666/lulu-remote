@@ -10,6 +10,7 @@ import 'host_tools_service.dart';
 import 'mesh_status_service.dart';
 import 'power_service.dart';
 import 'secure_store.dart';
+import 'wake_on_lan.dart';
 
 bool isPrivateTransferAddress(String address) {
   final ip = InternetAddress.tryParse(address);
@@ -36,6 +37,7 @@ class FileTransferHost {
   Future<String>? _readingToolsCode;
   static const _clipboardKey = 'qg_clipboard_enabled';
   static const _diagnosticsKey = 'qg_diagnostics_enabled';
+  static const _wakeTargetsKey = 'qg_wake_targets';
   static const _hardwareKey = 'qg_hardware_enabled';
   Future<String>? _readingCode;
   int _settingsGeneration = 0;
@@ -181,6 +183,32 @@ class FileTransferHost {
     await refresh();
   }
 
+  Future<Set<String>> wakeTargets() async {
+    final prefs = await SharedPreferences.getInstance();
+    return {
+      for (final value in prefs.getStringList(_wakeTargetsKey) ?? <String>[])
+        if (WakeOnLan.normalizeMac(value) case final mac?) mac,
+    };
+  }
+
+  Future<void> setWakeTargets(Iterable<String> values) async {
+    final targets = <String>{};
+    for (final value in values) {
+      final mac = WakeOnLan.normalizeMac(value);
+      if (mac == null) throw const FormatException('请填写有效的有线网卡 MAC 地址。');
+      targets.add(mac);
+    }
+    if (targets.length > 16) throw const FormatException('最多登记 16 台电脑。');
+    _settingsGeneration++;
+    _tools?.wakeTargets = const {};
+    final prefs = await SharedPreferences.getInstance();
+    if (!await prefs.setStringList(_wakeTargetsKey, targets.toList())) {
+      await prefs.reload();
+      throw StateError('无法保存唤醒转发设置。');
+    }
+    await refresh();
+  }
+
   Future<String> _diagnostics() async {
     var listening = true;
     try {
@@ -250,12 +278,14 @@ class FileTransferHost {
       final clipboard = await clipboardEnabled();
       final diagnostics = await diagnosticsEnabled();
       final hardware = await hardwareEnabled();
+      final targets = await wakeTargets();
       if (_timer == null ||
           !(fileEnabled ||
               powerEnabled ||
               clipboard ||
               diagnostics ||
-              hardware)) {
+              hardware ||
+              targets.isNotEmpty)) {
         await _disableCurrent();
         return;
       }
@@ -264,7 +294,9 @@ class FileTransferHost {
       final powerSecret =
           powerEnabled ? await PowerAccess.instance.code() : null;
       final toolsSecret =
-          clipboard || diagnostics || hardware ? await toolsCode() : null;
+          clipboard || diagnostics || hardware || targets.isNotEmpty
+              ? await toolsCode()
+              : null;
       final addresses = (await MeshStatusService().localAddresses())
           .where((entry) =>
               entry.network != null && isPrivateTransferAddress(entry.address))
@@ -296,6 +328,7 @@ class FileTransferHost {
           code: toolsSecret,
           readDiagnostics: _diagnostics,
           readHardware: HostHardware.readWindows,
+          sendWake: WakeOnLan.send,
           readClipboard: () async =>
               (await Clipboard.getData(Clipboard.kTextPlain))?.text ?? '',
           writeClipboard: (text) =>
@@ -305,7 +338,8 @@ class FileTransferHost {
       _tools
         ?..clipboardEnabled = clipboard
         ..diagnosticsEnabled = diagnostics
-        ..hardwareEnabled = hardware;
+        ..hardwareEnabled = hardware
+        ..wakeTargets = targets;
       final expired = _listeners.keys
           .where((address) => !addresses.contains(address))
           .toList();

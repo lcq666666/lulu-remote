@@ -12,6 +12,7 @@ import '../services/component_installer.dart';
 import '../services/device_store.dart';
 import '../services/file_transfer_host.dart';
 import '../services/file_transfer_service.dart';
+import '../services/host_tools_service.dart';
 import '../services/mesh_status_service.dart';
 import '../services/moonlight_launcher.dart';
 import '../services/power_service.dart';
@@ -117,8 +118,19 @@ class _HomeScreenState extends State<HomeScreen> {
     final mac = device.wakeMac;
     if (mac == null || _busy || _waking.contains(device.id)) return;
     setState(() => _waking.add(device.id));
+    final relay = device.wakeRelayAddress;
     try {
-      await WakeOnLan.send(mac);
+      if (relay == null) {
+        await WakeOnLan.send(mac);
+      } else {
+        if (!isPrivateTransferAddress(relay)) {
+          throw const HostToolsException('请检查转发电脑的组网 IPv4。');
+        }
+        final code = await askWakeRelayCode(context, relay);
+        if (!mounted || code == null) return;
+        await HostToolsClient(relay, code).wake(mac);
+        if (mounted) showLuluSnack(context, '转发电脑已发送唤醒包，正在等待上线。');
+      }
       final result = await WakeOnLan.waitForSunshine(
         probe: () =>
             _mesh.check(device).then((status) => status == HostStatus.online),
@@ -136,8 +148,14 @@ class _HomeScreenState extends State<HomeScreen> {
                 ? '电脑已上线，可以连接。'
                 : '电脑有过响应，目前远程服务仍未就绪。');
       } else if (result == WakeResult.timedOut) {
-        showLuluSnack(context, WakeOnLan.timeoutMessage);
+        showLuluSnack(
+            context,
+            relay == null
+                ? WakeOnLan.timeoutMessage
+                : WakeOnLan.relayTimeoutMessage);
       }
+    } on HostToolsException catch (error) {
+      if (mounted) showLuluSnack(context, '唤醒转发失败。${error.message}');
     } on SocketException {
       if (mounted) showLuluSnack(context, '唤醒包发送失败。请检查本机的局域网连接。');
     } on FormatException {

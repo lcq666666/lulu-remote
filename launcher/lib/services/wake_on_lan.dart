@@ -9,8 +9,10 @@ class WakeOnLan {
   static const limit = Duration(minutes: 2);
   static const timeoutMessage =
       '两分钟内未检测到远程服务。请检查是否在同一局域网、被控电脑是否接了有线网线，以及 BIOS 和网卡的网络唤醒设置。';
+  static const relayTimeoutMessage =
+      '转发电脑已发出唤醒包，两分钟内未检测到远程服务。请检查它是否与目标电脑同处一个局域网、目标是否接有线网线，以及 BIOS 和网卡的唤醒设置。';
   static const help =
-      '两台设备须在同一局域网，被控电脑使用有线网卡。在 BIOS/UEFI 中开启 Wake on LAN，在 Windows 网卡设置中允许魔术封包唤醒。仅通过 Tailscale 远程组网时，局域网广播无法直达。';
+      '同一局域网可直接唤醒。跨网时填写一台与目标同处局域网、开启唤醒转发的常开 Windows。目标电脑用有线网卡，在 BIOS/UEFI 和网卡设置中允许网络唤醒。';
 
   static String? normalizeMac(String input) {
     final value = input.trim();

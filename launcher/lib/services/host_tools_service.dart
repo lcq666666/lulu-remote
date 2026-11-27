@@ -6,6 +6,7 @@ import 'package:cryptography/cryptography.dart';
 
 import 'file_transfer_service.dart';
 import 'host_hardware.dart';
+import 'wake_on_lan.dart';
 
 const _path = '/v1/host-tools/';
 const _timeout = Duration(seconds: 8);
@@ -54,13 +55,16 @@ class HostToolsServer {
       required this.readClipboard,
       required this.writeClipboard,
       this.readDiagnostics,
-      this.readHardware});
+      this.readHardware,
+      this.sendWake});
 
   final String code;
   final Future<String> Function() readClipboard;
   final Future<void> Function(String) writeClipboard;
   final Future<String> Function()? readDiagnostics;
   final Future<HostHardware> Function()? readHardware;
+  final Future<void> Function(String)? sendWake;
+  Set<String> wakeTargets = const {};
   bool clipboardEnabled = false;
   bool hardwareEnabled = false;
   bool diagnosticsEnabled = false;
@@ -73,10 +77,13 @@ class HostToolsServer {
   bool _allows(String operation) =>
       active &&
       switch (operation) {
-        'challenge' =>
-          clipboardEnabled || diagnosticsEnabled || hardwareEnabled,
+        'challenge' => clipboardEnabled ||
+            diagnosticsEnabled ||
+            hardwareEnabled ||
+            wakeTargets.isNotEmpty && sendWake != null,
         'clipboard-read' || 'clipboard-write' => clipboardEnabled,
         'diagnostics' => diagnosticsEnabled && readDiagnostics != null,
+        'wake' => wakeTargets.isNotEmpty && sendWake != null,
         'hardware' => hardwareEnabled && readHardware != null,
         _ => false,
       };
@@ -103,12 +110,17 @@ class HostToolsServer {
             'clipboard-read',
             'clipboard-write',
             'diagnostics',
-            'hardware'
+            'hardware',
+            'wake'
           }.contains(operation)) {
         response.statusCode = HttpStatus.badRequest;
         return;
       }
-      final limit = operation == 'clipboard-write' ? _maxBodyBytes : 28;
+      final limit = switch (operation) {
+        'clipboard-write' => _maxBodyBytes,
+        'wake' => 28 + 17,
+        _ => 28,
+      };
       if (request.contentLength < 28 || request.contentLength > limit) {
         response.statusCode = HttpStatus.badRequest;
         return;
@@ -151,6 +163,15 @@ class HostToolsServer {
               jsonEncode((await readHardware!().timeout(_timeout)).toJson()));
         } else if (operation == 'diagnostics') {
           result = utf8.encode(await readDiagnostics!().timeout(_timeout));
+        } else if (operation == 'wake') {
+          final mac = WakeOnLan.normalizeMac(utf8.decode(plaintext));
+          if (mac == null) throw const FormatException();
+          if (!wakeTargets.contains(mac)) {
+            response.statusCode = HttpStatus.forbidden;
+            return;
+          }
+          await sendWake!(mac).timeout(_timeout);
+          result = const [];
         } else if (operation == 'clipboard-read') {
           result = utf8.encode(await readClipboard().timeout(_timeout));
           if (result.isEmpty || result.length > clipboardMaxBytes) {
@@ -204,6 +225,12 @@ class HostToolsClient {
       jsonDecode(utf8.decode(await _exchange('hardware', const [])))
           as Map<String, dynamic>);
 
+  Future<void> wake(String mac) async {
+    final normalized = WakeOnLan.normalizeMac(mac);
+    if (normalized == null) throw const FormatException();
+    await _exchange('wake', utf8.encode(normalized));
+  }
+
   Future<void> writeClipboard(String text) async {
     final bytes = utf8.encode(text);
     if (bytes.isEmpty || bytes.length > clipboardMaxBytes) {
@@ -255,7 +282,9 @@ class HostToolsClient {
     final response = await request.close().timeout(_timeout);
     if (response.statusCode != HttpStatus.ok) {
       throw HostToolsException(switch (response.statusCode) {
-        HttpStatus.forbidden => '被控电脑未开启这项功能。',
+        HttpStatus.forbidden => operation == 'wake'
+            ? '转发电脑未开启唤醒转发，或尚未登记这台电脑的有线网卡 MAC。'
+            : '被控电脑未开启这项功能。',
         HttpStatus.unauthorized => '协作码不正确，或请求已过期。',
         HttpStatus.unprocessableEntity => '被控端剪贴板没有可发送的文本，或文本超过 64 KiB。',
         HttpStatus.tooManyRequests => '被控电脑繁忙，请稍后再试。',

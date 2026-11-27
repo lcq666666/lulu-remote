@@ -2,8 +2,25 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lulu_remote/services/wake_on_lan.dart';
+import 'package:lulu_remote/services/file_transfer_host.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('relay targets are opt-in, normalized, persisted and removable',
+      () async {
+    SharedPreferences.setMockInitialValues({});
+    final host = FileTransferHost.instance;
+    expect(await host.wakeTargets(), isEmpty);
+    await expectLater(host.setWakeTargets(['invalid']), throwsFormatException);
+    await host.setWakeTargets(['00-aa-22-33-44-55', '00:AA:22:33:44:55']);
+    await (await SharedPreferences.getInstance()).reload();
+    expect(await host.wakeTargets(), {'00:AA:22:33:44:55'});
+    await host.setWakeTargets([]);
+    expect(await host.wakeTargets(), isEmpty);
+  });
+
   test('magic packet has six FF bytes and sixteen copies of the MAC', () {
     final packet = WakeOnLan.packet('00-11-22-aa-bb-cc');
     expect(packet, hasLength(102));

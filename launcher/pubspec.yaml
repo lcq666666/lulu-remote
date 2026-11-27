@@ -1,7 +1,7 @@
 name: lulu_remote
 description: "LULU Remote — a thin Flutter launcher shell for Sunshine + Moonlight. The launcher only stores devices and launches the stock engines; it does not implement video, NAT traversal or encryption itself."
 publish_to: "none"
-version: 0.3.0-beta.7+16
+version: 0.3.0-beta.8+17
 
 environment:
   sdk: ">=3.4.0 <4.0.0"

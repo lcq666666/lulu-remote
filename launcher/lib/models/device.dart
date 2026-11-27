@@ -20,6 +20,7 @@ class Device {
     this.paired = false,
     this.lastSeen,
     this.wakeMac,
+    this.wakeRelayAddress,
     this.group = '',
     this.nickname = '',
   });
@@ -39,6 +40,7 @@ class Device {
         hostUuid: json['hostUuid'] as String?,
         paired: json['paired'] as bool? ?? false,
         wakeMac: json['wakeMac'] as String?,
+        wakeRelayAddress: json['wakeRelayAddress'] as String?,
         group: (json['group'] as String? ?? '').trim(),
         nickname: (json['nickname'] as String? ?? '').trim(),
         lastSeen: json['lastSeen'] == null
@@ -71,6 +73,7 @@ class Device {
   String? hostUuid;
 
   final String? wakeMac;
+  final String? wakeRelayAddress;
   final String group;
   final String nickname;
 
@@ -101,6 +104,7 @@ class Device {
         'hostUuid': hostUuid,
         'paired': paired,
         if (wakeMac != null) 'wakeMac': wakeMac,
+        if (wakeRelayAddress != null) 'wakeRelayAddress': wakeRelayAddress,
         if (group.isNotEmpty) 'group': group,
         if (nickname.isNotEmpty) 'nickname': nickname,
         'lastSeen': lastSeen?.toIso8601String(),
@@ -119,6 +123,7 @@ class Device {
         paired: paired ?? this.paired,
         lastSeen: lastSeen,
         wakeMac: wakeMac,
+        wakeRelayAddress: wakeRelayAddress,
         group: group,
         nickname: nickname,
       );

@@ -10,12 +10,15 @@ void main() {
   late HostToolsServer server;
   late HostToolsClient client;
   late String clipboard;
+  late List<String> forwarded;
 
   setUp(() async {
     clipboard = '来自主机';
+    forwarded = [];
     final code = newTransferCode();
     server = HostToolsServer(
         code: code,
+        sendWake: (mac) async => forwarded.add(mac),
         readDiagnostics: () async => '电脑名称：TEST-PC',
         readHardware: () async => const HostHardware(
             cpu: 'TEST CPU',
@@ -33,6 +36,35 @@ void main() {
   });
 
   tearDown(() async => listener.close(force: true));
+
+  test('wake relay rejects missing authorization and unregistered MACs',
+      () async {
+    await expectLater(
+        client.wake('00:11:22:33:44:55'), throwsA(isA<HostToolsException>()));
+    server.wakeTargets = {'00:11:22:33:44:55'};
+    final stranger =
+        HostToolsClient('127.0.0.1', newTransferCode(), port: listener.port);
+    await expectLater(
+        stranger.wake('00:11:22:33:44:55'), throwsA(isA<HostToolsException>()));
+    await expectLater(
+        client.wake('00:11:22:33:44:66'),
+        throwsA(isA<HostToolsException>()
+            .having((e) => e.message, 'message', contains('未登记'))));
+    expect(forwarded, isEmpty);
+  });
+
+  test('registered MAC is forwarded, and removing it stops forwarding',
+      () async {
+    server.wakeTargets = {'00:AA:22:33:44:55'};
+    await client.wake('00-aa-22-33-44-55');
+    expect(forwarded, ['00:AA:22:33:44:55']);
+    server.clipboardEnabled = true;
+    server.wakeTargets = const {};
+    await expectLater(
+        client.wake('00:AA:22:33:44:55'), throwsA(isA<HostToolsException>()));
+    expect(forwarded, ['00:AA:22:33:44:55']);
+    expect(await client.readClipboard(), '来自主机');
+  });
 
   test('manually exchanges UTF-8 clipboard text in both directions', () async {
     server.clipboardEnabled = true;

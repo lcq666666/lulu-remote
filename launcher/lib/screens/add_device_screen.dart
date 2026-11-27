@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../app.dart';
 import '../models/device.dart';
+import '../services/file_transfer_host.dart';
 import '../services/mesh_status_service.dart';
 import '../services/wake_on_lan.dart';
 import '../widgets/lulu_ui.dart';
@@ -30,6 +31,8 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
       TextEditingController(text: widget.device?.appName ?? 'Desktop');
   late final _wakeMacController =
       TextEditingController(text: widget.device?.wakeMac);
+  late final _wakeRelayController =
+      TextEditingController(text: widget.device?.wakeRelayAddress);
   late final _groupController =
       TextEditingController(text: widget.device?.group);
   late final _nicknameController =
@@ -47,6 +50,14 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
     final wakeMac = WakeOnLan.normalizeMac(macText);
     if (macText.isNotEmpty && wakeMac == null) {
       setState(() => _error = '请填写有效的有线网卡 MAC 地址，例如 00:11:22:33:44:55。');
+      return;
+    }
+    final relay = _wakeRelayController.text.trim();
+    if (relay.isNotEmpty &&
+        (wakeMac == null ||
+            !isPrivateTransferAddress(relay) ||
+            relay == address)) {
+      setState(() => _error = '请填写目标电脑的 MAC 和另一台常开 Windows 的组网 IPv4。');
       return;
     }
     final sunshinePort = int.tryParse(_sunshinePortController.text.trim());
@@ -73,6 +84,10 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
     try {
       final local = await mesh.localAddresses();
       if (!mounted) return;
+      if (relay.isNotEmpty && mesh.isLocalAddress(relay, local)) {
+        setState(() => _error = '本机发送唤醒包时，留空转发电脑地址。');
+        return;
+      }
       if (mesh.isLocalAddress(address, local)) {
         setState(() => _error = MeshStatusService.selfAddressMessage);
         return;
@@ -102,6 +117,7 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
         appId: sameApp ? existing.appId : null,
         hostUuid: sameHost ? existing.hostUuid : null,
         wakeMac: wakeMac,
+        wakeRelayAddress: relay.isEmpty ? null : relay,
         group: _groupController.text.trim(),
         nickname: _nicknameController.text.trim(),
         lastSeen: sameHost ? existing.lastSeen : null,
@@ -117,6 +133,7 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
     _webPortController.dispose();
     _appController.dispose();
     _wakeMacController.dispose();
+    _wakeRelayController.dispose();
     _groupController.dispose();
     _nicknameController.dispose();
     super.dispose();
@@ -226,6 +243,17 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
               decoration: const InputDecoration(
                 labelText: '有线网卡 MAC 地址（远程开机，选填）',
                 hintText: '00:11:22:33:44:55',
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _wakeRelayController,
+              enabled: !_saving,
+              autocorrect: false,
+              style: LuluTheme.mono,
+              decoration: const InputDecoration(
+                labelText: '唤醒转发电脑的组网 IPv4（选填）',
+                hintText: '100.64.10.20',
               ),
             ),
             const SizedBox(height: 8),
