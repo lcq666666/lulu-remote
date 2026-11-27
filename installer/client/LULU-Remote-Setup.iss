@@ -1,4 +1,4 @@
-; LULU-Remote-Setup.iss — unified Windows installer.
+﻿; LULU-Remote-Setup.iss — unified Windows installer.
 ;
 ; One installer for controlling other computers and enabling this host.
 ; The front end installs first. Components are prepared when requested.
@@ -21,11 +21,11 @@
 
 [Setup]
 AppId={{7C3F2A1B-4D5E-4F6A-9B8C-1E2D3F4A5B6C}
-AppName=LULU Remote
+AppName=强哥远程
 AppVersion={#AppVersion}
-AppPublisher=LULU Remote
+AppPublisher=强哥远程
 DefaultDirName={autopf}\LULU Remote
-DefaultGroupName=LULU Remote
+DefaultGroupName=强哥远程
 PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -35,7 +35,7 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 RestartIfNeededByRun=no
-UninstallDisplayName=LULU Remote
+UninstallDisplayName=强哥远程
 LicenseFile=..\licenses\LULU-LICENSE.txt
 ; The installer is unsigned in v1 — Windows SmartScreen will warn on
 ; first run. A code-signing certificate is the only fix for that.
@@ -67,9 +67,9 @@ Source: "..\licenses\TAILSCALE-NOTICE.txt"; DestDir: "{app}\licenses"; Flags: ig
 Source: "..\vendor\MANIFEST.md"; DestDir: "{app}\licenses"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\LULU Remote"; Filename: "{app}\lulu_remote.exe"
-Name: "{group}\{cm:UninstallProgram,LULU Remote}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\LULU Remote"; Filename: "{app}\lulu_remote.exe"; Tasks: desktopicon
+Name: "{group}\强哥远程"; Filename: "{app}\lulu_remote.exe"
+Name: "{group}\{cm:UninstallProgram,强哥远程}"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\强哥远程"; Filename: "{app}\lulu_remote.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\lulu_remote.exe"; Description: "运行 LULU 远程"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\lulu_remote.exe"; Description: "运行强哥远程"; Flags: nowait postinstall skipifsilent

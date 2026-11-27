@@ -28,7 +28,7 @@ void main() {
             'imageFallback': call.arguments['mode'] == 'image',
             'hotkeyAvailable': false,
           },
-        'hidePrivacyScreen' => null,
+        'hidePrivacyScreen' || 'renewPrivacyScreen' => null,
         'pickPrivacyImage' => {
             'path': 'cover.png',
             'width': 800,
@@ -100,6 +100,66 @@ void main() {
         hasLength(1));
     expect(calls.where((call) => call.method == 'hidePrivacyScreen'),
         hasLength(1));
+  });
+
+  test('tray shows curtain once, renews while streaming and hides at idle',
+      () async {
+    await const PrivacySettings(PrivacyMode.image, imagePath: 'missing.png')
+        .save();
+    streaming = true;
+    await service.poll();
+    expect(calls.last.arguments,
+        {'mode': 'image', 'image': 'missing.png', 'live': true});
+    expect(service.liveImageFallback.value, isTrue);
+    await const PrivacySettings(PrivacyMode.off).save();
+    await service.poll();
+    expect(calls.last.method, 'renewPrivacyScreen');
+    streaming = false;
+    await service.poll();
+    expect(calls.last.method, 'hidePrivacyScreen');
+    expect(service.liveImageFallback.value, isFalse);
+    streaming = true;
+    await service.poll();
+    expect(calls.last.method, 'sunshineStreaming');
+  });
+
+  test('hotkey dismissal stays latched until the next confirmed stream',
+      () async {
+    await const PrivacySettings(PrivacyMode.black).save();
+    streaming = true;
+    await service.poll();
+    service.dismissed();
+    await service.poll();
+    expect(calls.last.method, 'sunshineStreaming');
+    streaming = false;
+    await service.poll();
+    streaming = true;
+    await service.poll();
+    expect(calls.last.method, 'showPrivacyScreen');
+  });
+
+  test('unknown sample closes live curtain without ending the session',
+      () async {
+    await const PrivacySettings(PrivacyMode.black).save();
+    streaming = true;
+    await service.poll();
+    final samples = <bool?>[];
+    sampleThrows = true;
+    await service.poll(onSample: (sample) async => samples.add(sample));
+    expect(calls.last.method, 'hidePrivacyScreen');
+    expect(samples, [null]);
+    sampleThrows = false;
+    await service.poll();
+    expect(calls.last.method, 'sunshineStreaming');
+  });
+
+  test('stopping the tray releases the live curtain', () async {
+    await const PrivacySettings(PrivacyMode.black).save();
+    streaming = true;
+    await service.poll();
+    await service.stop();
+    expect(calls.last.method, 'hidePrivacyScreen');
+    expect(service.streaming.value, isNull);
   });
 
   test('native preview dismissal and failed poll are not stream endings',

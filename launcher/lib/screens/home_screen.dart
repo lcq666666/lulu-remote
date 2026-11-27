@@ -498,7 +498,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ? null
             : AppBar(
                 title: Text(switch (_tab) {
-                  _HomeTab.connect => 'LULU 远程',
+                  _HomeTab.connect => '强哥远程',
                   _HomeTab.host => '让别人连接我',
                   _HomeTab.settings => '连接设置',
                 }),

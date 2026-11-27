@@ -11,7 +11,7 @@
     <uses-permission android:name="com.lulu.remote.permission.PAIRING_WORKER" />
 
     <application
-        android:label="LULU 远程"
+        android:label="强哥远程"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

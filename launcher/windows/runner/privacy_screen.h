@@ -19,7 +19,6 @@ struct PrivacyPreview {
 enum class PrivacyImagePick { kCancel, kInvalid, kSelected };
 PrivacyImagePick PickPrivacyImage(HWND owner, PrivacyImageFile* selected);
 
-// An idle-only preview, not a capture-excluded live privacy curtain.
 class PrivacyScreen {
  public:
   PrivacyScreen() = default;
@@ -29,13 +28,17 @@ class PrivacyScreen {
 
   static constexpr UINT kDismissedMessage = WM_APP + 3;
 
-  std::optional<PrivacyPreview> ShowPreview(HWND owner, bool use_image,
-                                  const std::wstring& path);
+  std::optional<PrivacyPreview> Show(HWND owner, bool use_image,
+                                     const std::wstring& path, bool live);
+  bool Renew();
   void Hide(bool notify = false);
 
  private:
   static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam,
                                       LPARAM lparam);
+  static LRESULT CALLBACK KeyboardHook(int code, WPARAM wparam, LPARAM lparam);
+  static LRESULT CALLBACK MouseHook(int code, WPARAM wparam, LPARAM lparam);
+  bool PrepareLive(HINSTANCE instance);
   void Layout();
   LRESULT HandleMessage(UINT message, WPARAM wparam, LPARAM lparam);
 
@@ -43,7 +46,12 @@ class PrivacyScreen {
   HWND owner_ = nullptr;
   HWND close_button_ = nullptr;
   HBITMAP bitmap_ = nullptr;
+  static PrivacyScreen* input_owner_;
+  HHOOK keyboard_hook_ = nullptr;
+  HHOOK mouse_hook_ = nullptr;
+  bool physical_keys_[256]{};
   bool hotkey_registered_ = false;
+  bool live_ = false;
   SIZE image_size_{};
 };
 

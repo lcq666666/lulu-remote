@@ -114,7 +114,7 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     if (lparam == WM_RBUTTONUP) {
       const HMENU menu = ::CreatePopupMenu();
       if (!menu) return 0;
-      ::AppendMenuW(menu, MF_STRING, 1, L"\u6253\u5f00 LULU");
+      ::AppendMenuW(menu, MF_STRING, 1, L"\u6253\u5f00\u5F3A\u54E5\u8FDC\u7A0B");
       ::AppendMenuW(menu, MF_STRING, 2, L"\u9000\u51fa");
       POINT cursor{};
       ::GetCursorPos(&cursor);
@@ -153,7 +153,7 @@ bool FlutterWindow::AddTrayIcon() {
   icon.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
   icon.uCallbackMessage = kTrayMessage;
   icon.hIcon = ::LoadIconW(::GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_APP_ICON));
-  wcscpy_s(icon.szTip, L"LULU Remote");
+  wcscpy_s(icon.szTip, L"\u5F3A\u54E5\u8FDC\u7A0B");
   return ::Shell_NotifyIconW(NIM_ADD, &icon) != FALSE;
 }
 
@@ -196,16 +196,18 @@ void FlutterWindow::HandleTrayCall(
       }));
     }
   } else if (method == "showPrivacyScreen") {
-    // This branch only enables an idle preview. A regular topmost window is
-    // not sufficient for a curtain during remote capture.
-    if (SunshineStreaming() != std::optional<bool>(false)) {
-      result->Error("privacy_streaming");
-      return;
-    }
     const auto* args = call.arguments() ?
         std::get_if<flutter::EncodableMap>(call.arguments()) : nullptr;
     if (!args) {
       result->Error("privacy_arguments");
+      return;
+    }
+    const auto live_entry = args->find(flutter::EncodableValue("live"));
+    const auto* live_argument = live_entry == args->end() ? nullptr :
+        std::get_if<bool>(&live_entry->second);
+    const bool live = live_argument && *live_argument;
+    if (SunshineStreaming() != std::optional<bool>(live)) {
+      result->Error("privacy_streaming");
       return;
     }
     const auto mode_entry = args->find(flutter::EncodableValue("mode"));
@@ -218,8 +220,8 @@ void FlutterWindow::HandleTrayCall(
     const auto image_entry = args->find(flutter::EncodableValue("image"));
     const auto* image = image_entry == args->end() ? nullptr :
         std::get_if<std::string>(&image_entry->second);
-    const auto preview = privacy_screen_.ShowPreview(
-        GetHandle(), *mode == "image", image ? Utf16FromUtf8(*image) : L"");
+    const auto preview = privacy_screen_.Show(
+        GetHandle(), *mode == "image", image ? Utf16FromUtf8(*image) : L"", live);
     if (preview) {
       result->Success(flutter::EncodableValue(flutter::EncodableMap{
           {flutter::EncodableValue("imageFallback"),
@@ -230,6 +232,9 @@ void FlutterWindow::HandleTrayCall(
     } else {
       result->Error("privacy_preview");
     }
+  } else if (method == "renewPrivacyScreen") {
+    if (privacy_screen_.Renew()) result->Success();
+    else result->Error("privacy_lease");
   } else if (method == "hidePrivacyScreen") {
     privacy_screen_.Hide();
     result->Success();
@@ -237,7 +242,7 @@ void FlutterWindow::HandleTrayCall(
     auto icon = TrayIcon(GetHandle());
     icon.uFlags = NIF_INFO;
     icon.dwInfoFlags = NIIF_INFO;
-    wcscpy_s(icon.szInfoTitle, L"LULU Remote");
+    wcscpy_s(icon.szInfoTitle, L"\u5F3A\u54E5\u8FDC\u7A0B");
     wcscpy_s(icon.szInfo, L"\u6709\u8bbe\u5907\u6b63\u5728\u8bf7\u6c42\u8fde\u63a5");
     result->Success(flutter::EncodableValue(
         ::Shell_NotifyIconW(NIM_MODIFY, &icon) != FALSE));

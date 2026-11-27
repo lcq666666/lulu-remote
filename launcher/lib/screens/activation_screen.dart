@@ -76,7 +76,7 @@ class _ActivationScreenState extends State<ActivationScreen> {
     final machine = widget.state.machine;
     final error = _error ?? widget.state.error;
     return Scaffold(
-      appBar: AppBar(title: const Text('激活 LULU 远程')),
+      appBar: AppBar(title: const Text('激活 强哥远程')),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(

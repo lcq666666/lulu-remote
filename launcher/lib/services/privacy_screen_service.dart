@@ -38,8 +38,7 @@ class PrivacySettings {
 typedef PrivacyImage = ({String path, int width, int height});
 typedef PrivacyPreview = ({bool imageFallback, bool hotkeyAvailable});
 
-/// Owns the state of the Windows privacy-screen preview. Live masking is not
-/// enabled until capture exclusion and remote input work on the stock host.
+/// Keeps the preview and the tray-driven curtain in sync with the runner.
 class PrivacyScreenService {
   PrivacyScreenService({
     MethodChannel channel = const MethodChannel('lulu/host_tray'),
@@ -49,14 +48,64 @@ class PrivacyScreenService {
   final MethodChannel _channel;
   final _streaming = ValueNotifier<bool?>(null);
   final _previewing = ValueNotifier<bool>(false);
+  final _liveImageFallback = ValueNotifier<bool>(false);
   bool _polling = false;
+  bool _sessionActive = false;
+  bool _live = false;
+  int _generation = 0;
 
   ValueListenable<bool?> get streaming => _streaming;
   ValueListenable<bool> get previewing => _previewing;
+  ValueListenable<bool> get liveImageFallback => _liveImageFallback;
+
+  Future<void> stop() async {
+    _generation++;
+    _sessionActive = false;
+    _streaming.value = null;
+    await _syncCurtain(null, _generation);
+  }
+
+  Future<void> _syncCurtain(bool? active, int generation) async {
+    try {
+      if (active != true) {
+        if (active == false) _sessionActive = false;
+        if (_live || _previewing.value && active == null) {
+          dismissed();
+          await _channel.invokeMethod<void>('hidePrivacyScreen');
+        }
+        return;
+      }
+      if (_live) {
+        await _channel.invokeMethod<void>('renewPrivacyScreen');
+        return;
+      }
+      if (_sessionActive) return;
+      _sessionActive = true;
+      if (_previewing.value) await closePreview();
+      final settings = await PrivacySettings.load();
+      if (generation != _generation || settings.mode == PrivacyMode.off) return;
+      // Mark it before calling into the runner so a stop can always hide it.
+      _live = true;
+      final result = await _channel.invokeMapMethod<String, bool>(
+        'showPrivacyScreen',
+        {'mode': settings.mode.name, 'image': settings.imagePath, 'live': true},
+      );
+      if (_live && generation == _generation) {
+        _liveImageFallback.value = result?['imageFallback'] ?? false;
+      }
+    } on Exception {
+      // The native curtain expires if renewal is unavailable. Keep the
+      // current session latched so a hotkey or failure cannot reopen it.
+      if (generation == _generation && _live) dismissed();
+    } on StateError {
+      if (generation == _generation && _live) dismissed();
+    }
+  }
 
   Future<void> poll({Future<void> Function(bool?)? onSample}) async {
     if (_polling) return;
     _polling = true;
+    final generation = _generation;
     try {
       bool? active;
       try {
@@ -66,16 +115,10 @@ class PrivacyScreenService {
       } on MissingPluginException {
         // E.g. a launcher binary predating this channel method.
       }
+      if (generation != _generation) return;
       _streaming.value = active;
-      if (active != false && _previewing.value) {
-        try {
-          await closePreview();
-        } on PlatformException {
-          // The runner's timer is the fallback if closing fails.
-        } on MissingPluginException {
-          // No runner API available.
-        }
-      }
+      await _syncCurtain(active, generation);
+      if (generation != _generation) return;
       if (onSample != null) await onSample(active);
     } finally {
       _polling = false;
@@ -120,4 +163,10 @@ class PrivacyScreenService {
   }
 
   void previewClosed() => _previewing.value = false;
+
+  void dismissed() {
+    previewClosed();
+    _live = false;
+    _liveImageFallback.value = false;
+  }
 }

@@ -324,7 +324,7 @@ class _LuluAppState extends State<LuluApp> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-        title: 'LULU 远程',
+        title: '强哥远程',
         navigatorKey: widget.navigatorKey ?? _navigator,
         theme: LuluTheme.lightTheme,
         darkTheme: LuluTheme.darkTheme,

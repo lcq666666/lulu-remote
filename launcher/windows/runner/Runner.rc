@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.lulu" "\0"
-            VALUE "FileDescription", "lulu_remote" "\0"
+            VALUE "FileDescription", "QG Remote" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "lulu_remote" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.lulu. All rights reserved." "\0"
             VALUE "OriginalFilename", "lulu_remote.exe" "\0"
-            VALUE "ProductName", "lulu_remote" "\0"
+            VALUE "ProductName", "QG Remote" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

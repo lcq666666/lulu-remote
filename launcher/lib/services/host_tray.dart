@@ -50,6 +50,7 @@ class HostTray {
     _timer = null;
     _account = null;
     _autoLock.reset();
+    unawaited(PrivacyScreenService.instance.stop());
     _seen.clear();
     _dismissed.clear();
     _offeredRegistration = false;
@@ -61,7 +62,7 @@ class HostTray {
     final generation = ++_generation;
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'privacyScreenDismissed') {
-        PrivacyScreenService.instance.previewClosed();
+        PrivacyScreenService.instance.dismissed();
       } else if (call.method == 'dismissPrompt') {
         final route = _prompt;
         if (route != null && route.isCurrent) route.navigator?.pop();
