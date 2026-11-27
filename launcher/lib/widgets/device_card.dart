@@ -10,6 +10,7 @@ enum _DeviceAction {
   transfer,
   clipboard,
   diagnostics,
+  streamScreen,
   command,
   hardware,
   edit,
@@ -35,6 +36,7 @@ class DeviceCard extends StatefulWidget {
       this.onTransfer,
       this.onClipboard,
       this.onDiagnostics,
+      this.onStreamScreen,
       this.onCommand,
       this.onHardware,
       this.onWake,
@@ -57,6 +59,7 @@ class DeviceCard extends StatefulWidget {
   final VoidCallback? onTransfer;
   final VoidCallback? onClipboard;
   final VoidCallback? onDiagnostics;
+  final VoidCallback? onStreamScreen;
   final VoidCallback? onCommand;
   final VoidCallback? onHardware;
   final VoidCallback? onWake;
@@ -91,6 +94,8 @@ class _DeviceCardState extends State<DeviceCard> {
         widget.onHardware?.call();
       case _DeviceAction.diagnostics:
         widget.onDiagnostics?.call();
+      case _DeviceAction.streamScreen:
+        widget.onStreamScreen?.call();
       case _DeviceAction.command:
         widget.onCommand?.call();
       case _DeviceAction.clipboard:
@@ -264,6 +269,7 @@ class _DeviceCardState extends State<DeviceCard> {
         widget.onTransfer != null ||
         widget.onClipboard != null ||
         widget.onDiagnostics != null ||
+        widget.onStreamScreen != null ||
         widget.onCommand != null ||
         widget.onHardware != null ||
         widget.onEdit != null ||
@@ -311,6 +317,10 @@ class _DeviceCardState extends State<DeviceCard> {
                   if (widget.onHardware != null)
                     const PopupMenuItem(
                         value: _DeviceAction.hardware, child: Text('硬件信息')),
+                  if (widget.onStreamScreen != null)
+                    const PopupMenuItem(
+                        value: _DeviceAction.streamScreen,
+                        child: Text('选择被控屏幕')),
                   if (widget.onDiagnostics != null)
                     const PopupMenuItem(
                         value: _DeviceAction.diagnostics, child: Text('连接诊断')),

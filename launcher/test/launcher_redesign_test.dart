@@ -7,6 +7,7 @@ import 'package:lulu_remote/models/device.dart';
 import 'package:lulu_remote/services/mesh_status_service.dart';
 import 'package:lulu_remote/widgets/device_card.dart';
 import 'package:lulu_remote/widgets/pin_display.dart';
+import 'package:lulu_remote/widgets/stream_screen_dialog.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -80,6 +81,36 @@ void main() {
     await tester.pumpAndSettle();
     expect(openedHelp, isTrue);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('monitor selection returns the chosen Sunshine screen number',
+      (tester) async {
+    int? selected;
+    await tester.pumpWidget(MaterialApp(
+      home: Builder(builder: (context) {
+        return Scaffold(
+          body: TextButton(
+            onPressed: () async {
+              selected = await showDialog<int>(
+                context: context,
+                builder: (_) => const StreamScreenDialog(streaming: true),
+              );
+            },
+            child: const Text('打开'),
+          ),
+        );
+      }),
+    ));
+    await tester.tap(find.text('打开'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('屏幕 1'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('屏幕 2').last);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Ctrl+Alt+Shift+F2'), findsOneWidget);
+    await tester.tap(find.text('切换屏幕'));
+    await tester.pumpAndSettle();
+    expect(selected, 2);
   });
 
   testWidgets('four PIN cells fit a narrow layout and use tabular digits',

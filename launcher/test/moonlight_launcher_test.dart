@@ -40,6 +40,24 @@ void main() {
         calls[1].arguments, {'uuid': uuid, 'appName': 'Desktop', 'appId': 123});
   });
 
+  test('Windows monitor switching targets the tracked stream and screen',
+      () async {
+    const streamChannel = MethodChannel('lulu/host_tray');
+    final calls = <MethodCall>[];
+    binding.defaultBinaryMessenger.setMockMethodCallHandler(streamChannel,
+        (call) async {
+      calls.add(call);
+      return false;
+    });
+    addTearDown(() => binding.defaultBinaryMessenger
+        .setMockMethodCallHandler(streamChannel, null));
+    expect(await WindowsMoonlight.switchMonitor(301, 2, focus: false), isFalse);
+    await expectLater(
+        WindowsMoonlight.switchMonitor(301, 13, focus: true), throwsRangeError);
+    expect(calls.single.method, 'switchStreamMonitor');
+    expect(calls.single.arguments, {'pid': 301, 'screen': 2, 'focus': false});
+  });
+
   test('Moonlight uses the existing address on default port', () {
     final device = Device(id: '1', name: 'Office', meshAddress: 'office.mesh');
     expect(WindowsMoonlight.endpoint(device), 'office.mesh');

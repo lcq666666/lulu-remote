@@ -25,6 +25,7 @@ import '../widgets/host_tools.dart';
 import '../widgets/file_transfer_dialog.dart';
 import '../widgets/lulu_ui.dart';
 import '../widgets/power_settings.dart';
+import '../widgets/stream_screen_dialog.dart';
 import 'add_device_screen.dart';
 import 'pairing_screen.dart';
 import 'setup_checklist_screen.dart';
@@ -197,7 +198,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return check;
   }
 
-  Future<void> _connect(Device device) async {
+  Future<void> _connect(Device device, {int? initialScreen}) async {
     if (_connectingId != null || _saving) return;
     if (Platform.isAndroid) {
       await _showAndroidHelp(device);
@@ -206,7 +207,7 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _connectingId = device.id);
     try {
       if (Platform.isWindows) {
-        await _connectWindows(device);
+        await _connectWindows(device, initialScreen: initialScreen);
       } else {
         _snack('这个平台还不支持一键连接，请用 Windows 或安卓。');
       }
@@ -221,7 +222,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _connectWindows(Device device) async {
+  Future<void> _connectWindows(Device device, {int? initialScreen}) async {
     var client = await _launcher.findWindowsClient();
     if (!mounted) return;
     if (client == null) {
@@ -307,6 +308,54 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       if (code != 0) _snack(await _windowsExitMessage(code, stderr, error));
     }));
+    if (initialScreen != null) {
+      unawaited(_selectInitialScreen(device, process, initialScreen));
+    }
+  }
+
+  Future<void> _selectInitialScreen(
+      Device device, Process process, int screen) async {
+    // The stream window appears after the connection has started. A user
+    // switching to another app during startup keeps their current focus.
+    for (var attempt = 0; attempt < 24; attempt++) {
+      if (!mounted || _windowsStreams[device.id] != process) return;
+      try {
+        if (await WindowsMoonlight.switchMonitor(process.pid, screen,
+            focus: false)) return;
+      } on PlatformException {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+    }
+    if (mounted && _windowsStreams[device.id] == process) {
+      _snack('请在 Moonlight 中按 Ctrl+Alt+Shift+F$screen 切换被控屏幕。');
+    }
+  }
+
+  Future<void> _chooseStreamScreen(Device device) async {
+    if (_busy) return;
+    final stream = _windowsStreams[device.id];
+    final screen = await showDialog<int>(
+      context: context,
+      builder: (context) => StreamScreenDialog(streaming: stream != null),
+    );
+    if (!mounted || screen == null || _busy) return;
+    if (stream == null) {
+      await _connect(device, initialScreen: screen);
+      return;
+    }
+    if (_windowsStreams[device.id] != stream) {
+      _snack('串流已结束，请重新连接后再切换。');
+      return;
+    }
+    try {
+      if (await WindowsMoonlight.switchMonitor(stream.pid, screen, focus: true)) {
+        return;
+      }
+    } on PlatformException {
+      // The manual Moonlight shortcut still works if Windows rejects focus.
+    }
+    _snack('请在 Moonlight 中按 Ctrl+Alt+Shift+F$screen 切换被控屏幕。');
   }
 
   void _stopClipboardSync() {
@@ -906,6 +955,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                       mobile: !windows,
                                       busy: _busy,
                                       onConnect: () => _connect(device),
+                                      onStreamScreen: windows
+                                          ? () => _chooseStreamScreen(device)
+                                          : null,
                                       connectLabel: Platform.isAndroid
                                           ? '连接 Moonlight'
                                           : null,

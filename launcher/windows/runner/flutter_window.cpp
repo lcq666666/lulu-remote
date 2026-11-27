@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "resource.h"
 #include "sunshine_session.h"
@@ -19,6 +20,60 @@ namespace {
 constexpr UINT kTrayMessage = WM_APP + 1;
 constexpr UINT kShowMessage = WM_APP + 2;
 constexpr wchar_t kCredentialName[] = L"LULU Remote/Sunshine host";
+
+struct StreamWindowSearch {
+  DWORD process_id;
+  HWND window = nullptr;
+};
+
+BOOL CALLBACK FindStreamWindow(HWND window, LPARAM context) {
+  auto* search = reinterpret_cast<StreamWindowSearch*>(context);
+  DWORD owner = 0;
+  ::GetWindowThreadProcessId(window, &owner);
+  if (owner != search->process_id || !::IsWindowVisible(window)) return TRUE;
+  wchar_t window_class[32] = {};
+  wchar_t title[512] = {};
+  ::GetClassNameW(window, window_class, ARRAYSIZE(window_class));
+  const int length = ::GetWindowTextW(window, title, ARRAYSIZE(title));
+  constexpr std::wstring_view suffix = L" - Moonlight";
+  const std::wstring_view text(title, static_cast<size_t>(length));
+  if (std::wstring_view(window_class) != L"SDL_app" ||
+      text.size() < suffix.size() ||
+      text.substr(text.size() - suffix.size()) != suffix) return TRUE;
+  search->window = window;
+  return FALSE;
+}
+
+// Return false before injecting any input so the initial switch can retry
+// when the newly launched stream becomes ready and takes focus.
+bool SwitchStreamMonitor(DWORD process_id, int screen, bool focus) {
+  StreamWindowSearch search{process_id};
+  ::EnumWindows(FindStreamWindow, reinterpret_cast<LPARAM>(&search));
+  if (!search.window) return false;
+  if (focus && ::GetForegroundWindow() != search.window) {
+    if (::IsIconic(search.window)) ::ShowWindow(search.window, SW_RESTORE);
+    ::SetForegroundWindow(search.window);
+  }
+  constexpr WORD modifiers[] = {VK_LCONTROL, VK_LMENU, VK_LSHIFT};
+  for (const int modifier : {VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN}) {
+    if (::GetAsyncKeyState(modifier) & 0x8000) return false;
+  }
+  if (::GetForegroundWindow() != search.window) return false;
+  const WORD keys[] = {modifiers[0], modifiers[1], modifiers[2],
+                       static_cast<WORD>(VK_F1 + screen - 1)};
+  INPUT input[8]{};
+  for (size_t i = 0; i < ARRAYSIZE(keys); ++i) {
+    input[i].type = INPUT_KEYBOARD;
+    input[i].ki.wVk = keys[i];
+    input[7 - i] = input[i];
+    input[7 - i].ki.dwFlags = KEYEVENTF_KEYUP;
+  }
+  const UINT sent = ::SendInput(ARRAYSIZE(input), input, sizeof(INPUT));
+  if (sent > 0 && sent < ARRAYSIZE(input)) {
+    ::SendInput(4, input + 4, sizeof(INPUT));
+  }
+  return sent == ARRAYSIZE(input);
+}
 
 NOTIFYICONDATAW TrayIcon(HWND window) {
   NOTIFYICONDATAW icon{};
@@ -172,7 +227,24 @@ void FlutterWindow::HandleTrayCall(
     const flutter::MethodCall<flutter::EncodableValue>& call,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
   const auto& method = call.method_name();
-  if (method == "sunshineStreaming") {
+  if (method == "switchStreamMonitor") {
+    const auto* args = call.arguments()
+        ? std::get_if<flutter::EncodableMap>(call.arguments()) : nullptr;
+    const auto get = [args](const char* key) -> const flutter::EncodableValue* {
+      if (!args) return nullptr;
+      const auto entry = args->find(flutter::EncodableValue(key));
+      return entry == args->end() ? nullptr : &entry->second;
+    };
+    const auto* pid = std::get_if<int32_t>(get("pid"));
+    const auto* screen = std::get_if<int32_t>(get("screen"));
+    const auto* focus = std::get_if<bool>(get("focus"));
+    if (!pid || *pid <= 0 || !screen || *screen < 1 || *screen > 12 || !focus) {
+      result->Error("stream_monitor_arguments");
+      return;
+    }
+    result->Success(flutter::EncodableValue(
+        SwitchStreamMonitor(static_cast<DWORD>(*pid), *screen, *focus)));
+  } else if (method == "sunshineStreaming") {
     const auto streaming = SunshineStreaming();
     if (streaming) result->Success(flutter::EncodableValue(*streaming));
     else result->Success();

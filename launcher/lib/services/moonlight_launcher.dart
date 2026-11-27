@@ -97,6 +97,19 @@ class MoonlightLauncher {
 
 /// A single Moonlight executable and profile used throughout a connection.
 class WindowsMoonlight {
+  static const _streamChannel = MethodChannel('lulu/host_tray');
+
+  static Future<bool> switchMonitor(int pid, int screen,
+      {required bool focus}) async {
+    RangeError.checkValueInInterval(screen, 1, 12, 'screen');
+    return await _streamChannel.invokeMethod<bool>('switchStreamMonitor', {
+          'pid': pid,
+          'screen': screen,
+          'focus': focus,
+        }) ??
+        false;
+  }
+
   const WindowsMoonlight(this.executable, this.directory);
 
   final String executable;
