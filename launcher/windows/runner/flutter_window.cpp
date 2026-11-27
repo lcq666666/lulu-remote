@@ -7,6 +7,8 @@
 #include <string>
 
 #include "resource.h"
+#include "sunshine_session.h"
+#include "utils.h"
 
 #include "flutter/generated_plugin_registrant.h"
 
@@ -68,6 +70,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  privacy_screen_.Hide();
   if (tray_channel_) {
     tray_channel_->SetMethodCallHandler(nullptr);
     tray_channel_.reset();
@@ -87,6 +90,10 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     auto icon = TrayIcon(hwnd);
     ::Shell_NotifyIconW(NIM_DELETE, &icon);
     tray_added_ = false;
+  }
+  if (message == PrivacyScreen::kDismissedMessage) {
+    if (tray_channel_) tray_channel_->InvokeMethod("privacyScreenDismissed", nullptr);
+    return 0;
   }
   if (message == kShowMessage) {
     ShowApp();
@@ -159,7 +166,74 @@ void FlutterWindow::HandleTrayCall(
     const flutter::MethodCall<flutter::EncodableValue>& call,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
   const auto& method = call.method_name();
-  if (method == "notify") {
+  if (method == "sunshineStreaming") {
+    const auto streaming = SunshineStreaming();
+    if (streaming) result->Success(flutter::EncodableValue(*streaming));
+    else result->Success();
+  } else if (method == "lockAfterStream") {
+    // Do not lock if another stream started while Dart was reading settings.
+    // The tray runner lives in the interactive user's Windows session, and
+    // can call the supported API directly (no rundll32 signature mismatch).
+    if (SunshineStreaming() == std::optional<bool>(false)) {
+      ::LockWorkStation();
+    }
+    result->Success();
+  } else if (method == "pickPrivacyImage") {
+    PrivacyImageFile image{};
+    const auto picked = PickPrivacyImage(GetHandle(), &image);
+    if (picked == PrivacyImagePick::kCancel) {
+      result->Success();
+    } else if (picked == PrivacyImagePick::kInvalid) {
+      result->Error("privacy_image");
+    } else {
+      result->Success(flutter::EncodableValue(flutter::EncodableMap{
+          {flutter::EncodableValue("path"),
+           flutter::EncodableValue(Utf8FromUtf16(image.path.c_str()))},
+          {flutter::EncodableValue("width"),
+           flutter::EncodableValue(static_cast<int>(image.dimensions.cx))},
+          {flutter::EncodableValue("height"),
+           flutter::EncodableValue(static_cast<int>(image.dimensions.cy))},
+      }));
+    }
+  } else if (method == "showPrivacyScreen") {
+    // This branch only enables an idle preview. A regular topmost window is
+    // not sufficient for a curtain during remote capture.
+    if (SunshineStreaming() != std::optional<bool>(false)) {
+      result->Error("privacy_streaming");
+      return;
+    }
+    const auto* args = call.arguments() ?
+        std::get_if<flutter::EncodableMap>(call.arguments()) : nullptr;
+    if (!args) {
+      result->Error("privacy_arguments");
+      return;
+    }
+    const auto mode_entry = args->find(flutter::EncodableValue("mode"));
+    const auto* mode = mode_entry == args->end() ? nullptr :
+        std::get_if<std::string>(&mode_entry->second);
+    if (!mode || (*mode != "black" && *mode != "image")) {
+      result->Error("privacy_mode");
+      return;
+    }
+    const auto image_entry = args->find(flutter::EncodableValue("image"));
+    const auto* image = image_entry == args->end() ? nullptr :
+        std::get_if<std::string>(&image_entry->second);
+    const auto preview = privacy_screen_.ShowPreview(
+        GetHandle(), *mode == "image", image ? Utf16FromUtf8(*image) : L"");
+    if (preview) {
+      result->Success(flutter::EncodableValue(flutter::EncodableMap{
+          {flutter::EncodableValue("imageFallback"),
+           flutter::EncodableValue(preview->image_fallback)},
+          {flutter::EncodableValue("hotkeyAvailable"),
+           flutter::EncodableValue(preview->hotkey_available)},
+      }));
+    } else {
+      result->Error("privacy_preview");
+    }
+  } else if (method == "hidePrivacyScreen") {
+    privacy_screen_.Hide();
+    result->Success();
+  } else if (method == "notify") {
     auto icon = TrayIcon(GetHandle());
     icon.uFlags = NIF_INFO;
     icon.dwInfoFlags = NIIF_INFO;

@@ -27,6 +27,10 @@ void main() {
       expect(request.uri.path, '/serverinfo');
       request.response.statusCode =
           ready ? HttpStatus.ok : HttpStatus.serviceUnavailable;
+      if (ready) {
+        request.response.write(
+            '<root status_code="200"><appversion>7.1</appversion></root>');
+      }
       request.response.close();
     });
 
@@ -45,5 +49,16 @@ void main() {
     });
 
     expect(await mesh.check(device), HostStatus.unreachable);
+  });
+  test('HTTP 200 from a different service does not mark the host online',
+      () async {
+    server.listen((request) {
+      request.response.write('<html>Not Sunshine</html>');
+      request.response.close();
+    });
+
+    final result = await mesh.diagnose(device);
+    expect(result.status, HostStatus.unreachable);
+    expect(result.detail, contains('连接端口'));
   });
 }

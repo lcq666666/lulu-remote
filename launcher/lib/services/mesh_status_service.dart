@@ -94,27 +94,65 @@ class MeshStatusService {
     }
   }
 
-  Future<HostStatus> check(Device device) async {
-    const timeout = Duration(seconds: 3);
+  Future<HostStatus> check(Device device) async =>
+      (await diagnose(device)).status;
+
+  Future<({HostStatus status, String detail})> diagnose(Device device) async {
+    const timeout = Duration(seconds: 4);
     final client = HttpClient()
       ..connectionTimeout = timeout
       ..findProxy = (_) => 'DIRECT';
     try {
-      final uri =
-          Uri.parse('${device.nvhttpBase}/serverinfo?uniqueid=lulu-probe');
-      final response = await client.getUrl(uri).then((request) {
+      return await (() async {
+        final uri = Uri(
+          scheme: 'http',
+          host: device.meshAddress,
+          port: device.sunshinePort,
+          path: '/serverinfo',
+        );
+        final request = await client.getUrl(uri);
         request.followRedirects = false;
-        return request.close();
-      }).timeout(timeout);
-      return response.statusCode == 200
-          ? HostStatus.online
-          : HostStatus.unreachable;
-    } on SocketException {
-      return HostStatus.offline;
-    } on HttpException {
-      return HostStatus.unreachable;
+        final response = await request.close();
+        if (response.statusCode != HttpStatus.ok) {
+          return (
+            status: HostStatus.unreachable,
+            detail: '远程服务返回 HTTP ${response.statusCode}。',
+          );
+        }
+        final body = await response.transform(utf8.decoder).join();
+        final info = XmlDocument.parse(body).rootElement;
+        if (info.name.local != 'root' ||
+            info.getAttribute('status_code') != '200' ||
+            info.getElement('appversion') == null) {
+          throw const FormatException('Invalid serverinfo');
+        }
+        return (status: HostStatus.online, detail: '');
+      })()
+          .timeout(timeout);
+    } on SocketException catch (error) {
+      return connectionRefused(error)
+          ? (status: HostStatus.offline, detail: '连接被拒绝，请确认对方已开启远程控制。')
+          : (status: HostStatus.unreachable, detail: '网络无法连接，请核对地址和双方的组网状态。');
     } on TimeoutException {
-      return HostStatus.unreachable;
+      return (
+        status: HostStatus.unreachable,
+        detail: '远程服务在 4 秒内没有回应，请确认对方已开机，双方组网已连接。'
+      );
+    } on HttpException {
+      return (
+        status: HostStatus.unreachable,
+        detail: '未收到完整的远程服务响应，请核对地址和连接端口。'
+      );
+    } on FormatException {
+      return (
+        status: HostStatus.unreachable,
+        detail: '该端口没有返回 Sunshine 设备信息，请核对连接端口。'
+      );
+    } on XmlException {
+      return (
+        status: HostStatus.unreachable,
+        detail: '该端口没有返回 Sunshine 设备信息，请核对连接端口。'
+      );
     } finally {
       client.close(force: true);
     }

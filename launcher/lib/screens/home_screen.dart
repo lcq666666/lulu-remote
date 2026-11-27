@@ -22,7 +22,7 @@ import 'this_computer_screen.dart';
 
 enum _HomeTab { connect, host, settings }
 
-typedef _HostCheck = ({HostStatus status, Duration elapsed});
+typedef _HostCheck = ({HostStatus status, String detail, Duration elapsed});
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen(
@@ -91,8 +91,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<_HostCheck> _measureHostCheck(Device device) async {
     final watch = Stopwatch()..start();
-    final status = await _mesh.check(device);
-    return (status: status, elapsed: watch.elapsed);
+    final result = await _mesh.diagnose(device);
+    return (
+      status: result.status,
+      detail: result.detail,
+      elapsed: watch.elapsed
+    );
   }
 
   Future<void> _checkConnection(Device device) async {
@@ -107,14 +111,14 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _status[device.id] = check);
     if (check.status != HostStatus.online) {
       throw MoonlightLaunchException(
-        '暂时连不上「${device.name}」。请确认对方电脑已开机、远程控制已开启，并检查连接地址。',
+        '连不上「${device.name}」（${device.meshAddress}:${device.sunshinePort}）。${check.detail}',
       );
     }
   }
 
   Future<void> _connect(Device device, {bool androidShortcut = false}) async {
     if (_connectingId != null || _saving) return;
-    if (!device.paired) {
+    if (!Platform.isWindows && !device.paired) {
       await _openPairing(device);
       return;
     }
@@ -141,17 +145,67 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _connectWindows(Device device) async {
-    await _checkConnection(device);
+    var client = await _launcher.findWindowsClient();
     if (!mounted) return;
-    if (await _launcher.findMoonlightQt() == null) {
-      _snack('首次连接，正在准备连接组件…');
+    if (client == null) {
+      _snack('正在准备 Windows 连接组件。如有管理员确认，请点「是」。');
       final result = await ComponentInstaller().prepareWindowsController();
-      if (await _launcher.findMoonlightQt() == null) {
-        throw MoonlightLaunchException(result);
+      client = await _launcher.findWindowsClient();
+      if (!mounted) return;
+      if (client == null) throw MoonlightLaunchException(result);
+    }
+
+    // Old device cards may be paired only with LULU's client certificate.
+    // Ask the exact Moonlight profile we will use for streaming every time.
+    var apps = await client.listApps(device);
+    if (!mounted) return;
+    if (apps == null) {
+      await _checkConnection(device);
+      if (!mounted) return;
+      final accepted = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('首次连接 ${device.name}'),
+          content: const Text(
+            'LULU 会用已保存的地址打开 Moonlight 配对窗口。请在被控电脑上，将窗口显示的 PIN 填入 LULU 的托盘配对提醒，或在 Sunshine 管理页提交。配对窗口显示成功后，关闭它即可继续。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('打开配对窗口'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted || accepted != true) return;
+      await client.pair(device);
+      if (!mounted) return;
+      apps = await client.listApps(device);
+      if (!mounted) return;
+      if (apps == null) {
+        await _checkConnection(device);
+        throw const MoonlightLaunchException('配对还没完成。请重新连接，并在被控电脑上确认 PIN。');
       }
     }
-    if (!mounted) return;
-    final process = await _launcher.streamWindows(device, _preset);
+
+    if (!device.paired) {
+      final updated = device.copyWith(paired: true);
+      await _deviceStore.updateDevice(updated);
+      if (!mounted) return;
+      setState(() => _devices = [
+            for (final saved in _devices)
+              if (saved.id == updated.id) updated else saved,
+          ]);
+    }
+    if (!apps.any((app) => app.toLowerCase() == device.appName.toLowerCase())) {
+      throw MoonlightLaunchException(
+          '「${device.name}」未提供「${device.appName}」。请核对 Sunshine 的应用列表，或编辑此电脑的应用名。');
+    }
+    final process = await client.stream(device, _preset);
     final error = StringBuffer();
     final stderr = process.stderr
         .transform(const Utf8Decoder(allowMalformed: true))
@@ -642,6 +696,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               device: device,
                               status: _status[device.id]?.status,
                               responseTime: _status[device.id]?.elapsed,
+                              statusDetail: _status[device.id]?.detail,
                               connecting: _connectingId == device.id,
                               mobile: !windows,
                               busy: _busy,

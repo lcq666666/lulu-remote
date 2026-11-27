@@ -20,11 +20,11 @@ class HostSetupService {
   Future<List<SetupCheck>> runChecks() async {
     final checks = <SetupCheck>[];
     if (Platform.isWindows) {
-      final moonlight = await _launcher.findMoonlightQt();
+      final moonlight = await _launcher.findWindowsClient();
       checks.add(SetupCheck(
-        title: 'Moonlight Qt 已安装',
+        title: 'Moonlight Qt 可运行',
         ok: moonlight != null,
-        detail: moonlight ?? '没有找到 moonlight-qt.exe',
+        detail: moonlight?.executable ?? '没有找到可运行的 Moonlight，请使用一键安装。',
         fixUrl: Uri.parse(
           'https://github.com/moonlight-stream/moonlight-qt/releases',
         ),

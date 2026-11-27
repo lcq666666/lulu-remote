@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'host_setup_service.dart';
+import 'moonlight_launcher.dart';
 
 /// One-click install of the missing components, from inside LULU.
 ///
@@ -109,11 +110,15 @@ class ComponentInstaller {
       return 'Moonlight：安装包里没有自带安装文件，已打开官网下载页，请下载后安装。';
     }
     final result = await _runElevated(setup, ['/quiet', '/norestart']);
-    return result == 0
-        ? 'Moonlight：已安装。'
-        : result == 3010
-            ? '连接组件已安装，请在方便时重启电脑。'
-            : '连接组件安装失败（退出码 $result），请重试。';
+    if (await MoonlightLauncher().findWindowsClient() != null) {
+      return 'Moonlight 可以使用了。';
+    }
+    return switch (result) {
+      0 => '安装程序已结束，但 Moonlight 仍无法启动。请重启电脑后在连接设置中重新检测。',
+      3010 || 1641 => '连接组件已安装，请重启电脑后再连接。',
+      1223 => '已取消管理员确认。请重新连接并在 Windows 弹窗中点「是」。',
+      _ => '连接组件安装失败（退出码 $result），请在连接设置中重试。',
+    };
   }
 
   Future<String> _installTailscaleWindows() async {
