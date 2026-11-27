@@ -134,9 +134,12 @@ class ComponentInstaller {
       '-File',
       script,
     ]);
-    return result == 0
-        ? 'Tailscale：已安装，接下来在托盘图标里登录一次。'
-        : 'Tailscale：安装失败（退出码 $result），可能是没联网，请联网后重试。';
+    return switch (result) {
+      0 => 'Tailscale 可以运行了，请在托盘图标里登录。',
+      3010 || 1641 => 'Tailscale 安装需要重启 Windows。重启后请重新检测。',
+      1223 => '已取消管理员确认。请重试并在 Windows 弹窗中点「是」。',
+      _ => 'Tailscale 安装未完成（退出码 $result）。请检查网络后重试。',
+    };
   }
 
   Future<String> _installMissingAndroid(List<SetupCheck> missing) async {

@@ -181,10 +181,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $language = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/Languages/ChineseSimplified.isl'
           Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/jrsoftware/issrc/is-6_7_1/Files/Languages/Unofficial/ChineseSimplified.isl' -OutFile $language
-      - name: Build LULU Windows installer
-        run: iscc installer\client\LULU-Remote-Setup.iss
-      - name: Build LULU Windows host installer
-        run: iscc installer\host\LULU-Host-Setup.iss
+      - name: Build Windows installers
+        run: ./installer/scripts/build-installers.ps1
       - name: Build portable Windows ZIP
         run: ./installer/scripts/build-portable.ps1
       - name: Upload Windows packages
@@ -219,6 +217,9 @@ jobs:
         run: |
           if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
             echo "configured=true" >> "$GITHUB_OUTPUT"
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo '::error::Configure the Android release keystore before publishing a version.'
+            exit 1
           else
             echo "configured=false" >> "$GITHUB_OUTPUT"
           fi
@@ -236,6 +237,10 @@ jobs:
         run: |
           umask 077
           key_file="$RUNNER_TEMP/lulu-release.keystore"
+          if [[ -z "$ANDROID_KEYSTORE_PASSWORD" || -z "$ANDROID_KEY_PASSWORD" || -z "$ANDROID_KEY_ALIAS" ]]; then
+            echo '::error::The Android release keystore alias and passwords are mandatory.'
+            exit 1
+          fi
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$key_file"
           for app in launcher pairing_worker/android_app; do
             cat > "$app/android/key.properties" <<EOF
@@ -273,7 +278,9 @@ jobs:
               "--dart-define=LULU_ACTIVATION_SERVER=$ACTIVATION_SERVER")
           fi
           (cd launcher && flutter pub get && flutter build apk "--$mode" "${activation[@]}")
-          (cd pairing_worker/android_app && flutter pub get && flutter build apk "--$mode")
+          version="$(sed -nE 's/^version: ([0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.]+)?\+[0-9]+)$/\1/p' launcher/pubspec.yaml)"
+          if [[ -z "$version" ]]; then exit 1; fi
+          (cd pairing_worker/android_app && flutter pub get && flutter build apk "--$mode" --build-name "${version%+*}" --build-number "${version##*+}")
           mkdir -p android-dist
           cp "launcher/build/app/outputs/flutter-apk/app-$mode.apk" "android-dist/LULU-Remote-$mode.apk"
           cp "pairing_worker/android_app/build/app/outputs/flutter-apk/app-$mode.apk" "android-dist/LULU-Pairing-Worker-$mode.apk"
@@ -337,7 +344,7 @@ jobs:
 
             ### Android
 
-            安装同一次构建提供的 `LULU-Remote-*.apk` 和 `LULU-Pairing-Worker-*.apk`。以 `debug` 结尾的 APK 使用调试签名。手机仍需安装 Moonlight，并按原有安卓流程配对。
+            安装同一次构建提供的 `LULU-Remote-release.apk` 和 `LULU-Pairing-Worker-release.apk`。如果已安装旧版调试 APK，先记录设备信息，再卸载旧的两个 APK，并重新安装。手机仍需安装 Moonlight。
 
             组件版本、校验值和许可信息见 `MANIFEST.md`。
           fail_on_unmatched_files: true

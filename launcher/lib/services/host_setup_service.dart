@@ -31,7 +31,7 @@ class HostSetupService {
       ));
       checks.add(await _checkCommand(
         title: 'Tailscale 已安装',
-        command: 'tailscale',
+        command: _tailscaleCommand(),
         args: ['version'],
         fixUrl: Uri.parse('https://tailscale.com/download/windows'),
       ));
@@ -64,6 +64,15 @@ class HostSetupService {
       ));
     }
     return checks;
+  }
+
+  static String _tailscaleCommand() {
+    final programFiles = Platform.environment['ProgramFiles'];
+    if (programFiles != null) {
+      final installed = File('$programFiles\\Tailscale\\tailscale.exe');
+      if (installed.existsSync()) return installed.path;
+    }
+    return 'tailscale';
   }
 
   Future<SetupCheck> _checkCommand({
