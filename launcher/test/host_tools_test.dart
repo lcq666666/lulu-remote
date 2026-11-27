@@ -6,6 +6,7 @@ import 'package:lulu_remote/services/clipboard_sync_session.dart';
 import 'package:lulu_remote/services/file_transfer_service.dart';
 import 'package:lulu_remote/services/host_tools_service.dart';
 import 'package:lulu_remote/services/host_hardware.dart';
+import 'package:lulu_remote/services/remote_command.dart';
 
 void main() {
   late HttpServer listener;
@@ -14,17 +15,23 @@ void main() {
   late String clipboard;
   late List<String> forwarded;
   late bool streaming;
+  late List<RemoteCommand> commands;
 
   setUp(() async {
     clipboard = '来自主机';
     forwarded = [];
     streaming = false;
+    commands = [];
     final code = newTransferCode();
     server = HostToolsServer(
         code: code,
         streaming: () => streaming,
         sendWake: (mac) async => forwarded.add(mac),
         readDiagnostics: () async => '电脑名称：TEST-PC',
+        runCommand: (query) async {
+          commands.add(query);
+          return '${query.command} 完成';
+        },
         readHardware: () async => const HostHardware(
             cpu: 'TEST CPU',
             ramBytes: 17179869184,
@@ -41,6 +48,41 @@ void main() {
   });
 
   tearDown(() async => listener.close(force: true));
+
+  test('remote commands require their own opt-in and the collaboration code',
+      () async {
+    server.diagnosticsEnabled = true;
+    await expectLater(client.command(RemoteCommand.version),
+        throwsA(isA<HostToolsException>()));
+    server.commandsEnabled = true;
+    final stranger =
+        HostToolsClient('127.0.0.1', newTransferCode(), port: listener.port);
+    await expectLater(stranger.command(RemoteCommand.hostname),
+        throwsA(isA<HostToolsException>()));
+    expect(await client.command(RemoteCommand.version), 'ver 完成');
+    expect(commands, [RemoteCommand.version]);
+    server.commandsEnabled = false;
+    await expectLater(
+        client.command(RemoteCommand.user), throwsA(isA<HostToolsException>()));
+    expect(commands, [RemoteCommand.version]);
+  });
+
+  test('command parser accepts only fixed query names', () {
+    expect(RemoteCommand.parse('hostname'), RemoteCommand.hostname);
+    expect(RemoteCommand.parse('hostname & ver'), isNull);
+    expect(RemoteCommand.parse('whoami /all'), isNull);
+    expect(RemoteCommand.parse(''), isNull);
+  });
+
+  test('Windows executes the three queries and reports their exit code',
+      () async {
+    for (final query in RemoteCommand.values) {
+      final output = await RemoteCommand.runOnWindows(query);
+      expect(output.split('\n').first, isNotEmpty);
+      expect(output.split('\n').length, greaterThan(1));
+      expect(output, endsWith('退出码：0'));
+    }
+  }, skip: !Platform.isWindows);
 
   test('wake relay rejects missing authorization and unregistered MACs',
       () async {

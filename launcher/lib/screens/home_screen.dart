@@ -932,6 +932,13 @@ class _HomeScreenState extends State<HomeScreen> {
                                               device: device,
                                               panel:
                                                   HostToolPanel.diagnostics)),
+                                      onCommand: () => showDialog<void>(
+                                        context: context,
+                                        barrierDismissible: false,
+                                        builder: (_) => HostToolsDialog(
+                                            device: device,
+                                            panel: HostToolPanel.command),
+                                      ),
                                       onClipboard: () => _showClipboard(device),
                                       onPower: (action) =>
                                           _powerAction(device, action),

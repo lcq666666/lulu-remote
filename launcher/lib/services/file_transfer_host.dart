@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'file_transfer_service.dart';
 import 'host_hardware.dart';
 import 'host_tools_service.dart';
+import 'remote_command.dart';
 import 'mesh_status_service.dart';
 import 'power_service.dart';
 import 'privacy_screen_service.dart';
@@ -39,6 +40,7 @@ class FileTransferHost {
   static const _clipboardSyncKey = 'qg_clipboard_sync_enabled';
   static const _clipboardKey = 'qg_clipboard_enabled';
   static const _diagnosticsKey = 'qg_diagnostics_enabled';
+  static const _commandKey = 'qg_commands_enabled';
   static const _wakeTargetsKey = 'qg_wake_targets';
   static const _hardwareKey = 'qg_hardware_enabled';
   Future<String>? _readingCode;
@@ -186,6 +188,20 @@ class FileTransferHost {
     await refresh();
   }
 
+  Future<bool> commandsEnabled() async =>
+      (await SharedPreferences.getInstance()).getBool(_commandKey) ?? false;
+
+  Future<void> setCommandsEnabled(bool enabled) async {
+    _settingsGeneration++;
+    if (!enabled) _tools?.commandsEnabled = false;
+    final prefs = await SharedPreferences.getInstance();
+    if (!await prefs.setBool(_commandKey, enabled)) {
+      await prefs.reload();
+      throw StateError('无法保存远程命令设置。');
+    }
+    await refresh();
+  }
+
   Future<bool> hardwareEnabled() async =>
       (await SharedPreferences.getInstance()).getBool(_hardwareKey) ?? false;
 
@@ -295,6 +311,7 @@ class FileTransferHost {
       final clipboard = await clipboardEnabled();
       final clipboardSync = await clipboardSyncEnabled();
       final diagnostics = await diagnosticsEnabled();
+      final commands = await commandsEnabled();
       final hardware = await hardwareEnabled();
       final targets = await wakeTargets();
       if (_timer == null ||
@@ -302,6 +319,7 @@ class FileTransferHost {
               powerEnabled ||
               clipboard ||
               diagnostics ||
+              commands ||
               hardware ||
               targets.isNotEmpty)) {
         await _disableCurrent();
@@ -312,7 +330,7 @@ class FileTransferHost {
       final powerSecret =
           powerEnabled ? await PowerAccess.instance.code() : null;
       final toolsSecret =
-          clipboard || diagnostics || hardware || targets.isNotEmpty
+          clipboard || diagnostics || commands || hardware || targets.isNotEmpty
               ? await toolsCode()
               : null;
       final addresses = (await MeshStatusService().localAddresses())
@@ -345,6 +363,7 @@ class FileTransferHost {
         _tools = HostToolsServer(
           code: toolsSecret,
           readDiagnostics: _diagnostics,
+          runCommand: RemoteCommand.runOnWindows,
           readHardware: HostHardware.readWindows,
           sendWake: WakeOnLan.send,
           streaming: () =>
@@ -359,6 +378,7 @@ class FileTransferHost {
         ?..clipboardEnabled = clipboard
         ..clipboardSyncEnabled = clipboardSync
         ..diagnosticsEnabled = diagnostics
+        ..commandsEnabled = commands
         ..hardwareEnabled = hardware
         ..wakeTargets = targets;
       final expired = _listeners.keys

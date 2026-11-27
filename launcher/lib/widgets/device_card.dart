@@ -10,6 +10,7 @@ enum _DeviceAction {
   transfer,
   clipboard,
   diagnostics,
+  command,
   hardware,
   edit,
   delete,
@@ -34,6 +35,7 @@ class DeviceCard extends StatefulWidget {
       this.onTransfer,
       this.onClipboard,
       this.onDiagnostics,
+      this.onCommand,
       this.onHardware,
       this.onWake,
       this.waking = false,
@@ -55,6 +57,7 @@ class DeviceCard extends StatefulWidget {
   final VoidCallback? onTransfer;
   final VoidCallback? onClipboard;
   final VoidCallback? onDiagnostics;
+  final VoidCallback? onCommand;
   final VoidCallback? onHardware;
   final VoidCallback? onWake;
   final bool waking;
@@ -88,6 +91,8 @@ class _DeviceCardState extends State<DeviceCard> {
         widget.onHardware?.call();
       case _DeviceAction.diagnostics:
         widget.onDiagnostics?.call();
+      case _DeviceAction.command:
+        widget.onCommand?.call();
       case _DeviceAction.clipboard:
         widget.onClipboard?.call();
       case _DeviceAction.edit:
@@ -149,6 +154,13 @@ class _DeviceCardState extends State<DeviceCard> {
                         title: const Text('连接诊断'),
                         onTap: () =>
                             Navigator.pop(context, _DeviceAction.diagnostics),
+                      ),
+                    if (widget.onCommand != null)
+                      ListTile(
+                        leading: const Icon(Icons.terminal),
+                        title: const Text('远程只读命令'),
+                        onTap: () =>
+                            Navigator.pop(context, _DeviceAction.command),
                       ),
                     if (widget.onClipboard != null)
                       ListTile(
@@ -252,6 +264,7 @@ class _DeviceCardState extends State<DeviceCard> {
         widget.onTransfer != null ||
         widget.onClipboard != null ||
         widget.onDiagnostics != null ||
+        widget.onCommand != null ||
         widget.onHardware != null ||
         widget.onEdit != null ||
         widget.onDelete != null ||
@@ -301,6 +314,9 @@ class _DeviceCardState extends State<DeviceCard> {
                   if (widget.onDiagnostics != null)
                     const PopupMenuItem(
                         value: _DeviceAction.diagnostics, child: Text('连接诊断')),
+                  if (widget.onCommand != null)
+                    const PopupMenuItem(
+                        value: _DeviceAction.command, child: Text('远程只读命令')),
                   if (widget.onClipboard != null)
                     const PopupMenuItem(
                         value: _DeviceAction.clipboard, child: Text('文本剪贴板')),

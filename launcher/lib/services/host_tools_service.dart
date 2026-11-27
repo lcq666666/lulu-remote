@@ -6,6 +6,7 @@ import 'package:cryptography/cryptography.dart';
 
 import 'file_transfer_service.dart';
 import 'host_hardware.dart';
+import 'remote_command.dart';
 import 'wake_on_lan.dart';
 
 const _path = '/v1/host-tools/';
@@ -64,6 +65,7 @@ class HostToolsServer {
       required this.readClipboard,
       required this.writeClipboard,
       this.readDiagnostics,
+      this.runCommand,
       this.readHardware,
       this.sendWake,
       this.streaming});
@@ -72,6 +74,7 @@ class HostToolsServer {
   final Future<String> Function() readClipboard;
   final Future<void> Function(String) writeClipboard;
   final Future<String> Function()? readDiagnostics;
+  final Future<String> Function(RemoteCommand)? runCommand;
   final Future<HostHardware> Function()? readHardware;
   final Future<void> Function(String)? sendWake;
   Set<String> wakeTargets = const {};
@@ -80,6 +83,7 @@ class HostToolsServer {
   bool clipboardSyncEnabled = false;
   bool hardwareEnabled = false;
   bool diagnosticsEnabled = false;
+  bool commandsEnabled = false;
   bool active = true;
   final _issued = <String, Duration>{};
   final _usedHellos = <String, Duration>{};
@@ -91,6 +95,7 @@ class HostToolsServer {
       switch (operation) {
         'challenge' => clipboardEnabled ||
             diagnosticsEnabled ||
+            commandsEnabled ||
             hardwareEnabled ||
             wakeTargets.isNotEmpty && sendWake != null,
         'clipboard-read' || 'clipboard-write' => clipboardEnabled,
@@ -98,6 +103,7 @@ class HostToolsServer {
         'clipboard-push' =>
           clipboardEnabled && clipboardSyncEnabled && streaming?.call() == true,
         'diagnostics' => diagnosticsEnabled && readDiagnostics != null,
+        'command' => commandsEnabled && runCommand != null,
         'wake' => wakeTargets.isNotEmpty && sendWake != null,
         'hardware' => hardwareEnabled && readHardware != null,
         _ => false,
@@ -127,6 +133,7 @@ class HostToolsServer {
             'clipboard-watch',
             'clipboard-push',
             'diagnostics',
+            'command',
             'hardware',
             'wake'
           }.contains(operation)) {
@@ -137,6 +144,7 @@ class HostToolsServer {
         'clipboard-write' || 'clipboard-push' => clipboardMaxBytes + 28,
         'clipboard-watch' => _digestBytes + 28,
         'wake' => 28 + 17,
+        'command' => 28 + 16,
         _ => 28,
       };
       if (request.contentLength < 28 || request.contentLength > limit) {
@@ -181,6 +189,13 @@ class HostToolsServer {
               jsonEncode((await readHardware!().timeout(_timeout)).toJson()));
         } else if (operation == 'diagnostics') {
           result = utf8.encode(await readDiagnostics!().timeout(_timeout));
+        } else if (operation == 'command') {
+          final query = RemoteCommand.parse(utf8.decode(plaintext));
+          if (query == null) {
+            response.statusCode = HttpStatus.badRequest;
+            return;
+          }
+          result = utf8.encode(await runCommand!(query).timeout(_timeout));
         } else if (operation == 'wake') {
           final mac = WakeOnLan.normalizeMac(utf8.decode(plaintext));
           if (mac == null) throw const FormatException();
@@ -257,6 +272,9 @@ class HostToolsClient {
 
   Future<String> diagnostics() async =>
       utf8.decode(await _exchange('diagnostics', const []));
+
+  Future<String> command(RemoteCommand query) async =>
+      utf8.decode(await _exchange('command', utf8.encode(query.command)));
 
   Future<HostHardware> hardware() async => HostHardware.fromJson(
       jsonDecode(utf8.decode(await _exchange('hardware', const [])))

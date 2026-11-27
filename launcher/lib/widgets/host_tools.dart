@@ -5,10 +5,11 @@ import '../models/device.dart';
 import '../services/file_transfer_host.dart';
 import '../services/file_transfer_service.dart';
 import '../services/host_tools_service.dart';
+import '../services/remote_command.dart';
 import '../services/secure_store.dart';
 import 'lulu_ui.dart';
 
-enum HostToolPanel { clipboard, diagnostics, hardware }
+enum HostToolPanel { clipboard, diagnostics, command, hardware }
 
 class HostToolsSettings extends StatefulWidget {
   const HostToolsSettings({super.key, this.panel = HostToolPanel.clipboard});
@@ -31,6 +32,7 @@ class _HostToolsSettingsState extends State<HostToolsSettings> {
       final enabled = await switch (widget.panel) {
         HostToolPanel.clipboard => _host.clipboardEnabled(),
         HostToolPanel.diagnostics => _host.diagnosticsEnabled(),
+        HostToolPanel.command => _host.commandsEnabled(),
         HostToolPanel.hardware => _host.hardwareEnabled(),
       };
       final syncEnabled = widget.panel == HostToolPanel.clipboard &&
@@ -71,11 +73,13 @@ class _HostToolsSettingsState extends State<HostToolsSettings> {
             title: Text(switch (widget.panel) {
               HostToolPanel.clipboard => '共享文本剪贴板',
               HostToolPanel.diagnostics => '允许远程连接诊断',
+              HostToolPanel.command => '允许远程只读命令',
               HostToolPanel.hardware => '共享硬件信息',
             }),
             subtitle: Text(switch (widget.panel) {
               HostToolPanel.clipboard => '持协作码的控制端可手动读取或替换本机剪贴板文本。',
               HostToolPanel.diagnostics => '持协作码的控制端可查询电脑名称和远程服务状态。',
+              HostToolPanel.command => '持协作码的控制端可运行 hostname、ver 和 whoami。',
               HostToolPanel.hardware => '持协作码的控制端可查看 CPU、内存、系统盘容量和 Windows 版本。',
             }),
             value: _enabled ?? false,
@@ -89,6 +93,8 @@ class _HostToolsSettingsState extends State<HostToolsSettings> {
                           _host.setDiagnosticsEnabled(value),
                         HostToolPanel.hardware =>
                           _host.setHardwareEnabled(value),
+                        HostToolPanel.command =>
+                          _host.setCommandsEnabled(value),
                       };
                       if (mounted) setState(() => _enabled = value);
                     }),
@@ -284,6 +290,7 @@ class _HostToolsDialogState extends State<HostToolsDialog> {
   bool _loading = true;
   bool _busy = false;
   String? _message;
+  RemoteCommand _command = RemoteCommand.hostname;
 
   @override
   void initState() {
@@ -305,6 +312,7 @@ class _HostToolsDialogState extends State<HostToolsDialog> {
   String get _title => switch (widget.panel) {
         HostToolPanel.clipboard => '文本剪贴板',
         HostToolPanel.diagnostics => '连接诊断',
+        HostToolPanel.command => '远程只读命令',
         HostToolPanel.hardware => '硬件信息',
       };
 
@@ -341,6 +349,8 @@ class _HostToolsDialogState extends State<HostToolsDialog> {
         result = (await client.hardware()).summary;
       } else if (widget.panel == HostToolPanel.diagnostics) {
         result = await client.diagnostics();
+      } else if (widget.panel == HostToolPanel.command) {
+        result = await client.command(_command);
       } else if (send) {
         await client.writeClipboard(
             (await Clipboard.getData(Clipboard.kTextPlain))?.text ?? '');
@@ -385,6 +395,7 @@ class _HostToolsDialogState extends State<HostToolsDialog> {
                 HostToolPanel.clipboard =>
                   '先在被控端打开「共享文本剪贴板」。发送或接收会替换目标设备的剪贴板文本。',
                 HostToolPanel.diagnostics => '先在被控端打开「允许远程连接诊断」。',
+                HostToolPanel.command => '先在被控端打开「允许远程只读命令」。',
                 HostToolPanel.hardware => '先在被控端打开「共享硬件信息」。',
               }),
               const SizedBox(height: 12),
@@ -395,6 +406,23 @@ class _HostToolsDialogState extends State<HostToolsDialog> {
                   autocorrect: false,
                   enableSuggestions: false,
                   decoration: const InputDecoration(labelText: '协作码')),
+              if (widget.panel == HostToolPanel.command)
+                DropdownButtonFormField<RemoteCommand>(
+                  value: _command,
+                  decoration: const InputDecoration(labelText: '命令'),
+                  items: [
+                    for (final query in RemoteCommand.values)
+                      DropdownMenuItem(
+                        value: query,
+                        child: Text('${query.command} · ${query.label}'),
+                      ),
+                  ],
+                  onChanged: _busy
+                      ? null
+                      : (value) {
+                          if (value != null) setState(() => _command = value);
+                        },
+                ),
               if (_busy) const LinearProgressIndicator(),
               if (_message case final message?)
                 Padding(
@@ -430,8 +458,11 @@ class _HostToolsDialogState extends State<HostToolsDialog> {
                   ? null
                   : () =>
                       _exchange(send: widget.panel == HostToolPanel.clipboard),
-              child: Text(
-                  widget.panel == HostToolPanel.clipboard ? '发送本机文本' : '查询')),
+              child: Text(switch (widget.panel) {
+                HostToolPanel.clipboard => '发送本机文本',
+                HostToolPanel.command => '执行命令',
+                _ => '查询',
+              })),
         ],
       );
 }

@@ -348,6 +348,7 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
           const Divider(),
           const HostToolsSettings(),
           const HostToolsSettings(panel: HostToolPanel.diagnostics),
+          const HostToolsSettings(panel: HostToolPanel.command),
           const HostToolsSettings(panel: HostToolPanel.hardware),
           const WakeRelaySettings(),
           const Divider(),
