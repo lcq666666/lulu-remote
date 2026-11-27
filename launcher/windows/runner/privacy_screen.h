@@ -40,11 +40,13 @@ class PrivacyScreen {
   static LRESULT CALLBACK MouseHook(int code, WPARAM wparam, LPARAM lparam);
   bool PrepareLive(HINSTANCE instance);
   void Layout();
+  void DismissByUser();
   LRESULT HandleMessage(UINT message, WPARAM wparam, LPARAM lparam);
 
   HWND window_ = nullptr;
   HWND owner_ = nullptr;
   int request_id_ = 0;
+  int dismissed_live_id_ = 0;
   HWND close_button_ = nullptr;
   HBITMAP bitmap_ = nullptr;
   static PrivacyScreen* input_owner_;

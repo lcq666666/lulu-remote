@@ -12,6 +12,7 @@ void main() {
   late List<MethodCall> calls;
   bool? streaming;
   bool sampleThrows = false;
+  bool renewThrows = false;
   Future<void> Function(MethodCall)? beforeShowReply;
 
   int curtainId(MethodCall call) => call.arguments['id']! as int;
@@ -22,6 +23,7 @@ void main() {
     calls = [];
     streaming = false;
     sampleThrows = false;
+    renewThrows = false;
     beforeShowReply = null;
     binding.defaultBinaryMessenger.setMockMethodCallHandler(channel,
         (call) async {
@@ -35,7 +37,9 @@ void main() {
             'imageFallback': call.arguments['mode'] == 'image',
             'hotkeyAvailable': false,
           },
-        'hidePrivacyScreen' || 'renewPrivacyScreen' => null,
+        'renewPrivacyScreen' =>
+          renewThrows ? throw PlatformException(code: 'privacy_lease') : null,
+        'hidePrivacyScreen' => null,
         'pickPrivacyImage' => {
             'path': 'cover.png',
             'width': 800,
@@ -146,20 +150,92 @@ void main() {
     expect(calls.last.method, 'showPrivacyScreen');
   });
 
-  test('unknown sample closes live curtain without ending the session',
+  test('unknown sample hides the curtain and restores the same session',
       () async {
-    await const PrivacySettings(PrivacyMode.black).save();
+    await const PrivacySettings(PrivacyMode.image, imagePath: 'original.png')
+        .save();
     streaming = true;
     await service.poll();
+    final firstShow = calls.last;
     final samples = <bool?>[];
     sampleThrows = true;
     await service.poll(onSample: (sample) async => samples.add(sample));
     expect(calls.last.method, 'hidePrivacyScreen');
     expect(samples, [null]);
+    expect(service.liveImageFallback.value, isFalse);
+    await const PrivacySettings(PrivacyMode.off).save();
     sampleThrows = false;
-    beforeShowReply = null;
+    await service.poll(onSample: (sample) async => samples.add(sample));
+    expect(samples, [null, true]);
+    expect(calls.last.method, 'showPrivacyScreen');
+    expect(calls.last.arguments, firstShow.arguments);
+    expect(service.liveImageFallback.value, isTrue);
+    streaming = false;
+    await service.poll();
+    streaming = true;
     await service.poll();
     expect(calls.last.method, 'sunshineStreaming');
+  });
+
+  test('an active stream retries a failed native verification or lease',
+      () async {
+    await const PrivacySettings(PrivacyMode.black).save();
+    var failed = false;
+    beforeShowReply = (_) async {
+      if (!failed) {
+        failed = true;
+        throw PlatformException(code: 'privacy_streaming');
+      }
+    };
+    streaming = true;
+    await service.poll();
+    final originalId = curtainId(calls.last);
+    await service.poll();
+    expect(calls.last.method, 'showPrivacyScreen');
+    expect(curtainId(calls.last), originalId);
+    renewThrows = true;
+    await service.poll();
+    expect(calls.last.method, 'renewPrivacyScreen');
+    renewThrows = false;
+    await service.poll();
+    expect(calls.last.method, 'showPrivacyScreen');
+    expect(curtainId(calls.last), originalId);
+  });
+
+  test('a delayed local dismissal survives unknown and recovered polls',
+      () async {
+    await const PrivacySettings(PrivacyMode.black).save();
+    streaming = true;
+    await service.poll();
+    final oldId = curtainId(calls.last);
+    streaming = null;
+    await service.poll();
+    expect(calls.last.method, 'hidePrivacyScreen');
+    service.dismissed(oldId);
+    streaming = true;
+    await service.poll();
+    expect(calls.last.method, 'sunshineStreaming');
+    streaming = false;
+    await service.poll();
+    streaming = true;
+    await service.poll();
+    final newId = curtainId(calls.last);
+    expect(newId, isNot(oldId));
+    service.dismissed(oldId);
+    await service.poll();
+    expect(calls.last.method, 'renewPrivacyScreen');
+  });
+
+  test('a recovered sample does not enable a curtain that started off',
+      () async {
+    streaming = true;
+    await service.poll();
+    await const PrivacySettings(PrivacyMode.black).save();
+    streaming = null;
+    await service.poll();
+    streaming = true;
+    await service.poll();
+    expect(calls.map((call) => call.method), everyElement('sunshineStreaming'));
   });
 
   test('stopping the tray releases the live curtain', () async {

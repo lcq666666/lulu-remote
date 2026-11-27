@@ -123,7 +123,12 @@ PrivacyScreen* PrivacyScreen::input_owner_ = nullptr;
 std::optional<PrivacyPreview> PrivacyScreen::Show(HWND owner, bool use_image,
                                                   const std::wstring& path,
                                                   bool live, int request_id) {
-  if (window_ || (live && !HasCaptureExclusion())) return std::nullopt;
+  // Live retries reuse their session ID so a delayed Dart notification
+  // cannot reopen a curtain the local user explicitly dismissed.
+  if (window_ || (live && (request_id == dismissed_live_id_ ||
+                           !HasCaptureExclusion()))) {
+    return std::nullopt;
+  }
   const auto instance = GetModuleHandleW(nullptr);
   WNDCLASSEXW klass{};
   klass.cbSize = sizeof(klass);
@@ -258,6 +263,11 @@ void PrivacyScreen::Hide(bool notify) {
   request_id_ = 0;
 }
 
+void PrivacyScreen::DismissByUser() {
+  if (live_) dismissed_live_id_ = request_id_;
+  Hide(true);
+}
+
 void PrivacyScreen::Layout() {
   const int x = GetSystemMetrics(SM_XVIRTUALSCREEN);
   const int y = GetSystemMetrics(SM_YVIRTUALSCREEN);
@@ -297,13 +307,15 @@ LRESULT PrivacyScreen::HandleMessage(UINT message, WPARAM wparam, LPARAM lparam)
       Layout();
       return 0;
     case kDismissLiveMessage:
-      if (live_) Hide(true);
+      if (live_) DismissByUser();
       return 0;
     case WM_HOTKEY:
-      if (wparam == kExitHotkey) Hide(true);
+      if (wparam == kExitHotkey) DismissByUser();
       return 0;
     case WM_TIMER:
-      if (wparam == kPreviewTimer) Hide(true);
+      // Only preview timers notify Dart. A live lease timeout is not a
+      // user dismissal: a later confirmed-active poll may show it again.
+      if (wparam == kPreviewTimer) Hide(!live_);
       return 0;
     case WM_COMMAND:
       if (LOWORD(wparam) == kCloseButton && HIWORD(wparam) == BN_CLICKED) Hide(true);

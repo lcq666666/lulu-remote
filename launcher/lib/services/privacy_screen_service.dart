@@ -50,7 +50,9 @@ class PrivacyScreenService {
   final _previewing = ValueNotifier<bool>(false);
   final _liveImageFallback = ValueNotifier<bool>(false);
   bool _polling = false;
-  bool _sessionActive = false;
+  PrivacySettings? _sessionSettings;
+  int? _sessionCurtainId;
+  bool _sessionDismissed = false;
   bool _live = false;
   int _generation = 0;
   int _nextCurtainId = 0;
@@ -72,15 +74,14 @@ class PrivacyScreenService {
   Future<void> stop() {
     final generation = ++_generation;
     return _queueCurtain(() async {
-      _sessionActive = false;
+      _resetSession();
       _streaming.value = null;
       await _syncCurtain(null, generation);
     });
   }
 
   Future<Map<String, bool>?> _show(PrivacySettings settings,
-      {required bool live}) async {
-    final id = ++_nextCurtainId;
+      {required bool live, required int id}) async {
     _curtainId = id;
     _live = live;
     try {
@@ -99,7 +100,7 @@ class PrivacyScreenService {
       }
       return result;
     } catch (_) {
-      dismissed(id);
+      if (_curtainId == id) _clearCurtain();
       rethrow;
     }
   }
@@ -112,27 +113,36 @@ class PrivacyScreenService {
   Future<void> _syncCurtain(bool? active, int generation) async {
     try {
       if (active != true) {
-        if (active == false) _sessionActive = false;
+        if (active == false) _resetSession();
         if (_live || _previewing.value && active == null) await _hide();
         return;
       }
+      if (_previewing.value) await _hide();
+      // Retain the settings and request ID for the entire session, including
+      // a failed sample or a failed native live check. The next confirmed
+      // active sample can restore the curtain without applying new settings.
+      final settings = _sessionSettings ??= await PrivacySettings.load();
+      if (generation != _generation ||
+          settings.mode == PrivacyMode.off ||
+          _sessionDismissed) return;
       if (_live) {
         await _channel.invokeMethod<void>('renewPrivacyScreen');
         return;
       }
-      if (_sessionActive) return;
-      _sessionActive = true;
-      if (_previewing.value) await _hide();
-      final settings = await PrivacySettings.load();
-      if (generation != _generation || settings.mode == PrivacyMode.off) return;
-      await _show(settings, live: true);
+      await _show(settings,
+          live: true, id: _sessionCurtainId ??= ++_nextCurtainId);
     } on Exception {
-      // The native curtain expires if renewal is unavailable. Keep the
-      // current session latched so a hotkey or failure cannot reopen it.
+      // A failed renewal expires natively. Retry only after an active sample.
       if (generation == _generation && _live) _clearCurtain();
     } on StateError {
       if (generation == _generation && _live) _clearCurtain();
     }
+  }
+
+  void _resetSession() {
+    _sessionSettings = null;
+    _sessionCurtainId = null;
+    _sessionDismissed = false;
   }
 
   Future<void> poll({Future<void> Function(bool?)? onSample}) async {
@@ -183,7 +193,7 @@ class PrivacyScreenService {
           generation != _generation) {
         throw StateError('串流正在进行或状态未知，暂不能预览。');
       }
-      final result = await _show(settings, live: false);
+      final result = await _show(settings, live: false, id: ++_nextCurtainId);
       return (
         imageFallback: result?['imageFallback'] ?? false,
         hotkeyAvailable: result?['hotkeyAvailable'] ?? false,
@@ -196,6 +206,7 @@ class PrivacyScreenService {
       });
 
   void dismissed(int id) {
+    if (_sessionCurtainId == id) _sessionDismissed = true;
     if (_curtainId == id) _clearCurtain();
   }
 
