@@ -5,6 +5,7 @@
 #include <shellapi.h>
 #include <wincred.h>
 
+#include <cstdint>
 #include <optional>
 #include <string>
 
@@ -94,7 +95,10 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     tray_added_ = false;
   }
   if (message == PrivacyScreen::kDismissedMessage) {
-    if (tray_channel_) tray_channel_->InvokeMethod("privacyScreenDismissed", nullptr);
+    if (tray_channel_) {
+      tray_channel_->InvokeMethod("privacyScreenDismissed",
+          std::make_unique<flutter::EncodableValue>(static_cast<int32_t>(wparam)));
+    }
     return 0;
   }
   if (message == kShowMessage) {
@@ -232,8 +236,16 @@ void FlutterWindow::HandleTrayCall(
     const auto image_entry = args->find(flutter::EncodableValue("image"));
     const auto* image = image_entry == args->end() ? nullptr :
         std::get_if<std::string>(&image_entry->second);
+    const auto id_entry = args->find(flutter::EncodableValue("id"));
+    const auto* request_id = id_entry == args->end() ? nullptr :
+        std::get_if<int32_t>(&id_entry->second);
+    if (!request_id || *request_id <= 0) {
+      result->Error("privacy_arguments");
+      return;
+    }
     const auto preview = privacy_screen_.Show(
-        GetHandle(), *mode == "image", image ? Utf16FromUtf8(*image) : L"", live);
+        GetHandle(), *mode == "image", image ? Utf16FromUtf8(*image) : L"",
+        live, *request_id);
     if (preview) {
       result->Success(flutter::EncodableValue(flutter::EncodableMap{
           {flutter::EncodableValue("imageFallback"),

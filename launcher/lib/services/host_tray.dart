@@ -66,7 +66,9 @@ class HostTray {
     final generation = ++_generation;
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'privacyScreenDismissed') {
-        PrivacyScreenService.instance.dismissed();
+        if (call.arguments case final int id) {
+          PrivacyScreenService.instance.dismissed(id);
+        }
       } else if (call.method == 'dismissPrompt') {
         final route = _prompt;
         if (route != null && route.isCurrent) route.navigator?.pop();
