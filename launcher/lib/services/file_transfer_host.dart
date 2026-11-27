@@ -34,6 +34,7 @@ class FileTransferHost {
   final _secureStore = SecureStore();
   final _listeners = <String, HttpServer>{};
   FileTransferServer? _handler;
+  Future<void> _fileCleanup = Future<void>.value();
   PowerServer? _power;
   HostToolsServer? _tools;
   Future<String>? _readingToolsCode;
@@ -80,23 +81,25 @@ class FileTransferHost {
   Future<String> rotateCode() async {
     if (_readingCode case final active?) await active;
     _settingsGeneration++;
-    _handler?.enabled = false;
-    _handler = null;
+    await _retireFileReceiver();
     final value = await _rotateCode();
+    _settingsGeneration++;
     await refresh();
     return value;
   }
 
   Future<void> setEnabled(bool enabled) async {
     _settingsGeneration++;
-    if (!enabled) {
-      _handler?.enabled = false;
-      _handler = null;
-    }
-    final prefs = await SharedPreferences.getInstance();
-    if (!await prefs.setBool(_enabledKey, enabled)) {
-      await prefs.reload();
-      throw StateError('无法保存文件接收设置。');
+    final cleanup = enabled ? null : _retireFileReceiver();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!await prefs.setBool(_enabledKey, enabled)) {
+        await prefs.reload();
+        throw StateError('无法保存文件接收设置。');
+      }
+      _settingsGeneration++;
+    } finally {
+      await cleanup;
     }
     await refresh();
   }
@@ -310,9 +313,16 @@ class FileTransferHost {
     await _closeListeners();
   }
 
+  Future<void> _retireFileReceiver() {
+    if (_handler case final handler?) {
+      _handler = null;
+      _fileCleanup = handler.disable();
+    }
+    return _fileCleanup;
+  }
+
   Future<void> _closeListeners() async {
-    _handler?.enabled = false;
-    _handler = null;
+    await _retireFileReceiver();
     final listeners = _listeners.values.toList();
     _listeners.clear();
     for (final listener in listeners) {
@@ -358,12 +368,13 @@ class FileTransferHost {
       if (_timer == null || generation != _settingsGeneration) return;
       final previous = _handler;
       if (secret == null || path == null) {
-        previous?.enabled = false;
-        _handler = null;
+        await _retireFileReceiver();
+        if (_timer == null || generation != _settingsGeneration) return;
       } else if (previous == null ||
           previous.code != secret ||
           previous.receiveDirectory.path != path) {
-        previous?.enabled = false;
+        await _retireFileReceiver();
+        if (_timer == null || generation != _settingsGeneration) return;
         _handler =
             FileTransferServer(code: secret, receiveDirectory: Directory(path));
       }

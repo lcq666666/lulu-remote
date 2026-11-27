@@ -76,8 +76,20 @@ class FileTransferServer {
   final String code;
   final Directory receiveDirectory;
   final _challenges = <String, DateTime>{};
-  bool enabled = true;
-  bool _receiving = false;
+  bool _enabled = true;
+  _IncomingFileUpload? _upload;
+
+  /// Rejects new requests and interrupts even an upload waiting for data.
+  /// Waits for the upload response and disk cleanup before returning.
+  /// Re-enabling uses a new receiver.
+  Future<void> disable() async {
+    _enabled = false;
+    _challenges.clear();
+    if (_upload case final upload?) {
+      upload.abort();
+      await upload.done.future;
+    }
+  }
 
   Future<void> handle(HttpRequest request) async {
     final response = request.response;
@@ -85,7 +97,7 @@ class FileTransferServer {
     response.headers.contentType = ContentType.json;
     response.persistentConnection = false;
     try {
-      if (!enabled) {
+      if (!_enabled) {
         response.statusCode = HttpStatus.forbidden;
       } else if (request.method == 'GET' &&
           request.uri.path == _challengePath) {
@@ -106,6 +118,12 @@ class FileTransferServer {
         await response.close();
       } on IOException {
         // The sender may close the connection to cancel a transfer.
+      } finally {
+        if (_upload case final upload?
+            when identical(upload.request, request)) {
+          _upload = null;
+          upload.done.complete();
+        }
       }
     }
   }
@@ -121,7 +139,7 @@ class FileTransferServer {
     }
     final now = DateTime.now();
     _challenges.removeWhere((_, expiry) => !now.isBefore(expiry));
-    if (_challenges.length >= 64 || _receiving) {
+    if (_challenges.length >= 64 || _upload != null) {
       response.statusCode = HttpStatus.tooManyRequests;
       return;
     }
@@ -160,11 +178,12 @@ class FileTransferServer {
       return;
     }
     _challenges.remove(challenge);
-    if (_receiving) {
+    if (_upload != null) {
       response.statusCode = HttpStatus.tooManyRequests;
       return;
     }
-    _receiving = true;
+    final upload = _IncomingFileUpload(request);
+    _upload = upload;
     Directory? staging;
     File? partial;
     RandomAccessFile? output;
@@ -177,12 +196,10 @@ class FileTransferServer {
       final checksum = _DigestSink();
       final sink = sha256.startChunkedConversion(checksum);
       var received = 0;
-      await for (final chunk in request.timeout(_idleTimeout)) {
+      while (await upload.chunks.moveNext().timeout(_idleTimeout)) {
+        if (upload.aborted) break;
+        final chunk = upload.chunks.current;
         received += chunk.length;
-        if (!enabled) {
-          response.statusCode = HttpStatus.forbidden;
-          return;
-        }
         if (received > size) throw const FormatException();
         sink.add(chunk);
         await opened.writeFrom(chunk);
@@ -190,7 +207,7 @@ class FileTransferServer {
       sink.close();
       await opened.close();
       output = null;
-      if (!enabled) {
+      if (upload.aborted) {
         response.statusCode = HttpStatus.forbidden;
         return;
       }
@@ -204,7 +221,7 @@ class FileTransferServer {
           FileSystemEntityType.notFound) {
         savedName = '${_nonce().substring(0, 10)}-$name';
       }
-      if (!enabled) {
+      if (upload.aborted) {
         response.statusCode = HttpStatus.forbidden;
         return;
       }
@@ -216,9 +233,13 @@ class FileTransferServer {
         'proof': _sign(code, ['receipt', challenge, savedName, digest]),
       }));
     } finally {
-      _receiving = false;
+      await upload.closeStream();
       try {
         await output?.close();
+      } on FileSystemException {
+        // Still attempt to remove the staged upload below.
+      }
+      try {
         if (partial != null && await partial.exists()) await partial.delete();
         await staging?.delete();
       } on FileSystemException {
@@ -226,6 +247,26 @@ class FileTransferServer {
       }
     }
   }
+}
+
+class _IncomingFileUpload {
+  _IncomingFileUpload(this.request) : chunks = StreamIterator(request);
+
+  final HttpRequest request;
+  final StreamIterator<List<int>> chunks;
+  final done = Completer<void>();
+  bool aborted = false;
+  Future<void>? _closing;
+
+  void abort() {
+    aborted = true;
+    unawaited(closeStream());
+  }
+
+  Future<void> closeStream() => _closing ??= chunks.cancel().then<void>((_) {},
+          onError: (Object _, StackTrace __) {
+        // A peer disconnect during cancellation cannot stop local disk cleanup.
+      });
 }
 
 class _DigestSink implements Sink<Digest> {

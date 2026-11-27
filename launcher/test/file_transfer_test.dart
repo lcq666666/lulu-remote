@@ -86,7 +86,7 @@ void main() {
         sendBytes('denied.txt', [1], withCode: newTransferCode()),
         throwsA(isA<FileTransferFailure>().having(
             (failure) => failure.message, 'message', contains('接收码不正确'))));
-    receiver.enabled = false;
+    await receiver.disable();
     await expectLater(
         sendBytes('denied.txt', [1]),
         throwsA(isA<FileTransferFailure>()
@@ -113,7 +113,7 @@ void main() {
     );
   });
 
-  test('reports disabled receiving during upload and removes partial data',
+  test('disabling drains and removes a stalled upload before the next chunk',
       () async {
     final block = Uint8List(65536);
     final continueUpload = Completer<void>();
@@ -139,16 +139,25 @@ void main() {
           .having((failure) => failure.message, 'message', contains('已关闭'))),
     );
     try {
-      var stagingCreated = false;
+      var firstChunkSaved = false;
       for (var attempt = 0; attempt < 100; attempt++) {
-        if (!await root.list().isEmpty) {
-          stagingCreated = true;
+        final staged = await root
+            .list(recursive: true)
+            .where((entry) => entry is File)
+            .cast<File>()
+            .toList();
+        if (staged.length == 1 &&
+            await staged.single.length() == block.length) {
+          firstChunkSaved = true;
           break;
         }
         await Future<void>.delayed(const Duration(milliseconds: 20));
       }
-      expect(stagingCreated, isTrue);
-      receiver.enabled = false;
+      expect(firstChunkSaved, isTrue);
+      // Don't release the sender: disabling must wake up the server's
+      // outstanding read rather than relying on a new chunk or idle timeout.
+      await receiver.disable().timeout(const Duration(seconds: 4));
+      expect(await root.list().isEmpty, isTrue);
     } finally {
       continueUpload.complete();
     }
