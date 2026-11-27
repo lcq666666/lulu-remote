@@ -20,7 +20,7 @@ if (!(Test-Path -LiteralPath (Join-Path $app 'lulu_pairing_worker.exe'))) {
 
 $appVendor = Join-Path $app 'vendor'
 $licenses = Join-Path $app 'licenses'
-New-Item -ItemType Directory -Path $appVendor, $licenses | Out-Null
+New-Item -ItemType Directory -Force -Path $appVendor, $licenses | Out-Null
 Copy-Item -LiteralPath (Join-Path $vendor 'moonlight') -Destination $appVendor -Recurse
 foreach ($file in @('MoonlightSetup-6.2.0.exe', 'Sunshine-Windows-AMD64-installer.msi')) {
     Copy-Item -LiteralPath (Join-Path $vendor $file) -Destination $appVendor
