@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lulu_remote/services/clipboard_sync_session.dart';
 import 'package:lulu_remote/services/file_transfer_service.dart';
 import 'package:lulu_remote/services/host_tools_service.dart';
 import 'package:lulu_remote/services/host_hardware.dart';
@@ -11,13 +13,16 @@ void main() {
   late HostToolsClient client;
   late String clipboard;
   late List<String> forwarded;
+  late bool streaming;
 
   setUp(() async {
     clipboard = '来自主机';
     forwarded = [];
+    streaming = false;
     final code = newTransferCode();
     server = HostToolsServer(
         code: code,
+        streaming: () => streaming,
         sendWake: (mac) async => forwarded.add(mac),
         readDiagnostics: () async => '电脑名称：TEST-PC',
         readHardware: () async => const HostHardware(
@@ -96,6 +101,75 @@ void main() {
     expect(clipboard, '来自主机');
   });
 
+  test('automatic clipboard requires opt-in on the host and a live stream',
+      () async {
+    server.clipboardEnabled = true;
+    await expectLater(
+        client.watchClipboard(null), throwsA(isA<HostToolsException>()));
+    server.clipboardSyncEnabled = true;
+    await expectLater(
+        client.watchClipboard(null), throwsA(isA<HostToolsException>()));
+    streaming = true;
+    expect((await client.watchClipboard(null)).text, isNull);
+    streaming = false;
+    await expectLater(
+        client.pushClipboard('blocked'), throwsA(isA<HostToolsException>()));
+    expect(clipboard, '来自主机');
+  });
+
+  test(
+      'sync transfers new text in both directions without echo or initial copy',
+      () async {
+    server.clipboardEnabled = true;
+    server.clipboardSyncEnabled = true;
+    streaming = true;
+    var local = '本机原有文本';
+    final errors = <Object>[];
+    final session = ClipboardSyncSession(
+      client: client,
+      readLocal: () async => local,
+      writeLocal: (text) async => local = text,
+      onError: errors.add,
+    );
+    addTearDown(session.stop);
+    await session.start(interval: const Duration(hours: 1));
+    await session.poll();
+    expect(local, '本机原有文本');
+    expect(clipboard, '来自主机');
+    local = '本机复制';
+    await session.poll();
+    expect(clipboard, '本机复制');
+    clipboard = '远端复制';
+    await session.poll();
+    expect(local, '远端复制');
+    await session.poll();
+    expect(local, clipboard);
+    streaming = false;
+    local = '断开后不发送';
+    await session.poll();
+    expect(errors, hasLength(1));
+    expect(clipboard, '远端复制');
+  });
+
+  test('stopping during a clipboard poll discards the delayed result',
+      () async {
+    final fake = _DelayedClipboardClient();
+    var local = 'local';
+    final session = ClipboardSyncSession(
+        client: fake,
+        readLocal: () async => local,
+        writeLocal: (text) async => local = text,
+        onError: (error) => fail('$error'));
+    addTearDown(session.stop);
+    await session.start(interval: const Duration(hours: 1));
+    final pending = session.poll();
+    await fake.request.future;
+    session.stop();
+    fake.reply.complete((digest: List.filled(32, 1), text: 'remote'));
+    await pending;
+    expect(local, 'local');
+  });
+
   test('fixed diagnostics only return a result when enabled', () async {
     server.clipboardEnabled = true;
     await expectLater(client.diagnostics(), throwsA(isA<HostToolsException>()));
@@ -131,4 +205,18 @@ void main() {
     expect(hardware.ramBytes, greaterThan(0));
     expect(hardware.diskBytes, greaterThanOrEqualTo(hardware.diskFreeBytes));
   }, skip: !Platform.isWindows);
+}
+
+class _DelayedClipboardClient extends HostToolsClient {
+  _DelayedClipboardClient() : super('127.0.0.1', '');
+  final request = Completer<void>();
+  final reply = Completer<({List<int> digest, String? text})>();
+
+  @override
+  Future<({List<int> digest, String? text})> watchClipboard(
+      List<int>? digest) async {
+    if (digest == null) return (digest: List.filled(32, 0), text: null);
+    request.complete();
+    return reply.future;
+  }
 }

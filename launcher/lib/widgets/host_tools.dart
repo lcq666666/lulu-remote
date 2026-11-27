@@ -21,6 +21,7 @@ class HostToolsSettings extends StatefulWidget {
 class _HostToolsSettingsState extends State<HostToolsSettings> {
   final _host = FileTransferHost.instance;
   bool? _enabled;
+  bool _syncEnabled = false;
   bool _busy = false;
 
   @override
@@ -32,7 +33,14 @@ class _HostToolsSettingsState extends State<HostToolsSettings> {
         HostToolPanel.diagnostics => _host.diagnosticsEnabled(),
         HostToolPanel.hardware => _host.hardwareEnabled(),
       };
-      if (mounted) setState(() => _enabled = enabled);
+      final syncEnabled = widget.panel == HostToolPanel.clipboard &&
+          await _host.clipboardSyncEnabled();
+      if (mounted) {
+        setState(() {
+          _enabled = enabled;
+          _syncEnabled = syncEnabled;
+        });
+      }
     });
   }
 
@@ -85,6 +93,19 @@ class _HostToolsSettingsState extends State<HostToolsSettings> {
                       if (mounted) setState(() => _enabled = value);
                     }),
           ),
+          if (_enabled == true && widget.panel == HostToolPanel.clipboard)
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('串流期间自动同步文本'),
+              subtitle: const Text('控制端还需在本次连接中启动同步。'),
+              value: _syncEnabled,
+              onChanged: _busy
+                  ? null
+                  : (value) => _run(() async {
+                        await _host.setClipboardSyncEnabled(value);
+                        if (mounted) setState(() => _syncEnabled = value);
+                      }),
+            ),
           if (_enabled == true)
             Wrap(spacing: 8, runSpacing: 8, children: [
               OutlinedButton(
@@ -241,10 +262,17 @@ Future<String?> askWakeRelayCode(BuildContext context, String address) {
 }
 
 class HostToolsDialog extends StatefulWidget {
-  const HostToolsDialog(
-      {super.key, required this.device, this.panel = HostToolPanel.clipboard});
+  const HostToolsDialog({
+    super.key,
+    required this.device,
+    this.panel = HostToolPanel.clipboard,
+    this.startSync,
+    this.stopSync,
+  });
   final HostToolPanel panel;
   final Device device;
+  final Future<void> Function(String)? startSync;
+  final VoidCallback? stopSync;
 
   @override
   State<HostToolsDialog> createState() => _HostToolsDialogState();
@@ -279,6 +307,20 @@ class _HostToolsDialogState extends State<HostToolsDialog> {
         HostToolPanel.diagnostics => '连接诊断',
         HostToolPanel.hardware => '硬件信息',
       };
+
+  Future<void> _sync() async {
+    setState(() => _busy = true);
+    try {
+      await widget.startSync!(_code.text.trim());
+      if (mounted) Navigator.pop(context);
+    } on HostToolsException catch (error) {
+      if (mounted) setState(() => _message = error.message);
+    } catch (_) {
+      if (mounted) setState(() => _message = '无法启动剪贴板同步。');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   Future<void> _exchange({required bool send}) async {
     if (_busy) return;
@@ -363,6 +405,21 @@ class _HostToolsDialogState extends State<HostToolsDialog> {
           TextButton(
               onPressed: _busy ? null : () => Navigator.pop(context),
               child: const Text('关闭')),
+          if (widget.stopSync != null)
+            OutlinedButton(
+              onPressed: _busy
+                  ? null
+                  : () {
+                      widget.stopSync!();
+                      Navigator.pop(context);
+                    },
+              child: const Text('停止自动同步'),
+            )
+          else if (widget.startSync != null)
+            OutlinedButton(
+              onPressed: _busy || _loading ? null : _sync,
+              child: const Text('本次串流自动同步'),
+            ),
           if (widget.panel == HostToolPanel.clipboard)
             OutlinedButton(
                 onPressed:

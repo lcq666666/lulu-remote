@@ -9,6 +9,7 @@ import 'host_hardware.dart';
 import 'host_tools_service.dart';
 import 'mesh_status_service.dart';
 import 'power_service.dart';
+import 'privacy_screen_service.dart';
 import 'secure_store.dart';
 import 'wake_on_lan.dart';
 
@@ -35,6 +36,7 @@ class FileTransferHost {
   PowerServer? _power;
   HostToolsServer? _tools;
   Future<String>? _readingToolsCode;
+  static const _clipboardSyncKey = 'qg_clipboard_sync_enabled';
   static const _clipboardKey = 'qg_clipboard_enabled';
   static const _diagnosticsKey = 'qg_diagnostics_enabled';
   static const _wakeTargetsKey = 'qg_wake_targets';
@@ -143,6 +145,21 @@ class FileTransferHost {
 
   Future<bool> clipboardEnabled() async =>
       (await SharedPreferences.getInstance()).getBool(_clipboardKey) ?? false;
+
+  Future<bool> clipboardSyncEnabled() async =>
+      (await SharedPreferences.getInstance()).getBool(_clipboardSyncKey) ??
+      false;
+
+  Future<void> setClipboardSyncEnabled(bool enabled) async {
+    _settingsGeneration++;
+    if (!enabled) _tools?.clipboardSyncEnabled = false;
+    final prefs = await SharedPreferences.getInstance();
+    if (!await prefs.setBool(_clipboardSyncKey, enabled)) {
+      await prefs.reload();
+      throw StateError('无法保存剪贴板同步设置。');
+    }
+    await refresh();
+  }
 
   Future<void> setClipboardEnabled(bool enabled) async {
     _settingsGeneration++;
@@ -276,6 +293,7 @@ class FileTransferHost {
       final fileEnabled = await isEnabled();
       final powerEnabled = await PowerAccess.instance.isEnabled();
       final clipboard = await clipboardEnabled();
+      final clipboardSync = await clipboardSyncEnabled();
       final diagnostics = await diagnosticsEnabled();
       final hardware = await hardwareEnabled();
       final targets = await wakeTargets();
@@ -329,6 +347,8 @@ class FileTransferHost {
           readDiagnostics: _diagnostics,
           readHardware: HostHardware.readWindows,
           sendWake: WakeOnLan.send,
+          streaming: () =>
+              PrivacyScreenService.instance.streaming.value == true,
           readClipboard: () async =>
               (await Clipboard.getData(Clipboard.kTextPlain))?.text ?? '',
           writeClipboard: (text) =>
@@ -337,6 +357,7 @@ class FileTransferHost {
       }
       _tools
         ?..clipboardEnabled = clipboard
+        ..clipboardSyncEnabled = clipboardSync
         ..diagnosticsEnabled = diagnostics
         ..hardwareEnabled = hardware
         ..wakeTargets = targets;

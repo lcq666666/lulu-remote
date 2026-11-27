@@ -12,8 +12,10 @@ const _path = '/v1/host-tools/';
 const _timeout = Duration(seconds: 8);
 const _challengeLife = Duration(seconds: 30);
 const clipboardMaxBytes = 64 * 1024;
-const _maxBodyBytes = clipboardMaxBytes + 28;
+const _digestBytes = 32;
+const _maxBodyBytes = clipboardMaxBytes + _digestBytes + 28;
 final _cipher = AesGcm.with256bits();
+final _clipboardDigest = Sha256();
 
 class HostToolsException implements Exception {
   const HostToolsException(this.message);
@@ -27,6 +29,13 @@ Future<List<int>> _read(Stream<List<int>> stream, int size) async {
     bytes.addAll(chunk);
   }
   return bytes;
+}
+
+bool _sameDigest(List<int> left, List<int> right) {
+  for (var i = 0; i < left.length; i++) {
+    if (left[i] != right[i]) return false;
+  }
+  return true;
 }
 
 List<int> _aad(String phase, String binding) =>
@@ -56,7 +65,8 @@ class HostToolsServer {
       required this.writeClipboard,
       this.readDiagnostics,
       this.readHardware,
-      this.sendWake});
+      this.sendWake,
+      this.streaming});
 
   final String code;
   final Future<String> Function() readClipboard;
@@ -65,7 +75,9 @@ class HostToolsServer {
   final Future<HostHardware> Function()? readHardware;
   final Future<void> Function(String)? sendWake;
   Set<String> wakeTargets = const {};
+  final bool Function()? streaming;
   bool clipboardEnabled = false;
+  bool clipboardSyncEnabled = false;
   bool hardwareEnabled = false;
   bool diagnosticsEnabled = false;
   bool active = true;
@@ -82,6 +94,9 @@ class HostToolsServer {
             hardwareEnabled ||
             wakeTargets.isNotEmpty && sendWake != null,
         'clipboard-read' || 'clipboard-write' => clipboardEnabled,
+        'clipboard-watch' ||
+        'clipboard-push' =>
+          clipboardEnabled && clipboardSyncEnabled && streaming?.call() == true,
         'diagnostics' => diagnosticsEnabled && readDiagnostics != null,
         'wake' => wakeTargets.isNotEmpty && sendWake != null,
         'hardware' => hardwareEnabled && readHardware != null,
@@ -109,6 +124,8 @@ class HostToolsServer {
             'challenge',
             'clipboard-read',
             'clipboard-write',
+            'clipboard-watch',
+            'clipboard-push',
             'diagnostics',
             'hardware',
             'wake'
@@ -117,7 +134,8 @@ class HostToolsServer {
         return;
       }
       final limit = switch (operation) {
-        'clipboard-write' => _maxBodyBytes,
+        'clipboard-write' || 'clipboard-push' => clipboardMaxBytes + 28,
+        'clipboard-watch' => _digestBytes + 28,
         'wake' => 28 + 17,
         _ => 28,
       };
@@ -172,6 +190,25 @@ class HostToolsServer {
           }
           await sendWake!(mac).timeout(_timeout);
           result = const [];
+        } else if (operation == 'clipboard-watch') {
+          if (plaintext.isNotEmpty && plaintext.length != _digestBytes) {
+            throw const FormatException();
+          }
+          final text = await readClipboard().timeout(_timeout);
+          final bytes =
+              text.length <= clipboardMaxBytes ? utf8.encode(text) : <int>[];
+          final sendable =
+              bytes.isNotEmpty && bytes.length <= clipboardMaxBytes;
+          final digest = sendable
+              ? (await _clipboardDigest.hash(bytes)).bytes
+              : List<int>.filled(_digestBytes, 0);
+          final changed =
+              plaintext.isNotEmpty && !_sameDigest(plaintext, digest);
+          result = [...digest, if (sendable && changed) ...bytes];
+        } else if (operation == 'clipboard-push') {
+          if (plaintext.isEmpty) throw const FormatException();
+          await writeClipboard(utf8.decode(plaintext)).timeout(_timeout);
+          result = (await _clipboardDigest.hash(plaintext)).bytes;
         } else if (operation == 'clipboard-read') {
           result = utf8.encode(await readClipboard().timeout(_timeout));
           if (result.isEmpty || result.length > clipboardMaxBytes) {
@@ -224,6 +261,28 @@ class HostToolsClient {
   Future<HostHardware> hardware() async => HostHardware.fromJson(
       jsonDecode(utf8.decode(await _exchange('hardware', const [])))
           as Map<String, dynamic>);
+
+  Future<({List<int> digest, String? text})> watchClipboard(
+      List<int>? digest) async {
+    final bytes = await _exchange('clipboard-watch', digest ?? const []);
+    if (bytes.length < _digestBytes) throw const FormatException();
+    return (
+      digest: bytes.sublist(0, _digestBytes),
+      text: bytes.length == _digestBytes
+          ? null
+          : utf8.decode(bytes.sublist(_digestBytes)),
+    );
+  }
+
+  Future<List<int>> pushClipboard(String text) async {
+    final bytes = utf8.encode(text);
+    if (bytes.isEmpty || bytes.length > clipboardMaxBytes) {
+      throw const FormatException();
+    }
+    final result = await _exchange('clipboard-push', bytes);
+    if (result.length != _digestBytes) throw const FormatException();
+    return result;
+  }
 
   Future<void> wake(String mac) async {
     final normalized = WakeOnLan.normalizeMac(mac);
@@ -282,9 +341,11 @@ class HostToolsClient {
     final response = await request.close().timeout(_timeout);
     if (response.statusCode != HttpStatus.ok) {
       throw HostToolsException(switch (response.statusCode) {
-        HttpStatus.forbidden => operation == 'wake'
-            ? '转发电脑未开启唤醒转发，或尚未登记这台电脑的有线网卡 MAC。'
-            : '被控电脑未开启这项功能。',
+        HttpStatus.forbidden => switch (operation) {
+            'wake' => '转发电脑未开启唤醒转发，或尚未登记这台电脑的有线网卡 MAC。',
+            'clipboard-watch' || 'clipboard-push' => '被控电脑未开启自动同步剪贴板，或串流已结束。',
+            _ => '被控电脑未开启这项功能。',
+          },
         HttpStatus.unauthorized => '协作码不正确，或请求已过期。',
         HttpStatus.unprocessableEntity => '被控端剪贴板没有可发送的文本，或文本超过 64 KiB。',
         HttpStatus.tooManyRequests => '被控电脑繁忙，请稍后再试。',

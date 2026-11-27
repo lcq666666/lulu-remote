@@ -3,11 +3,13 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../app.dart';
 import '../models/device.dart';
 import '../models/quality_preset.dart';
+import '../services/clipboard_sync_session.dart';
 import '../services/component_installer.dart';
 import '../services/device_store.dart';
 import '../services/file_transfer_host.dart';
@@ -60,6 +62,9 @@ class _HomeScreenState extends State<HomeScreen> {
   QualityPreset _preset = QualityPreset.office1080;
   String? _connectingId;
   final _waking = <String>{};
+  final _windowsStreams = <String, Process>{};
+  ClipboardSyncSession? _clipboardSync;
+  String? _clipboardDeviceId;
   bool _loading = true;
   bool _saving = false;
   Timer? _statusTimer;
@@ -79,6 +84,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _statusTimer?.cancel();
+    _stopClipboardSync();
     super.dispose();
   }
 
@@ -288,10 +294,67 @@ class _HomeScreenState extends State<HomeScreen> {
       throw MoonlightLaunchException(
           await _windowsExitMessage(earlyExit, stderr, error));
     }
+    _windowsStreams[device.id] = process;
     unawaited(exit.then((code) async {
+      if (_windowsStreams[device.id] == process) {
+        _windowsStreams.remove(device.id);
+        if (_clipboardDeviceId == device.id) _stopClipboardSync();
+      }
       if (code != 0) _snack(await _windowsExitMessage(code, stderr, error));
     }));
   }
+
+  void _stopClipboardSync() {
+    _clipboardSync?.stop();
+    _clipboardSync = null;
+    _clipboardDeviceId = null;
+  }
+
+  Future<void> _startClipboardSync(Device device, String code) async {
+    final process = _windowsStreams[device.id];
+    if (!mounted ||
+        process == null ||
+        !isPrivateTransferAddress(device.meshAddress)) {
+      throw const HostToolsException('请先用设备卡进入桌面，并检查电脑的组网地址。');
+    }
+    _stopClipboardSync();
+    final session = ClipboardSyncSession(
+      client: HostToolsClient(device.meshAddress, code),
+      readLocal: () async =>
+          (await Clipboard.getData(Clipboard.kTextPlain))?.text ?? '',
+      writeLocal: (text) => Clipboard.setData(ClipboardData(text: text)),
+      onError: (error) {
+        _stopClipboardSync();
+        _snack(error is HostToolsException ? error.message : '剪贴板同步已停止。');
+      },
+    );
+    _clipboardSync = session;
+    _clipboardDeviceId = device.id;
+    try {
+      await session.start();
+      if (!mounted ||
+          _clipboardSync != session ||
+          _windowsStreams[device.id] != process) {
+        throw const HostToolsException('串流已结束。');
+      }
+      _snack('本次串流的文本剪贴板同步已开启。');
+    } catch (_) {
+      if (_clipboardSync == session) _stopClipboardSync();
+      rethrow;
+    }
+  }
+
+  Future<void> _showClipboard(Device device) => showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => HostToolsDialog(
+          device: device,
+          startSync: _windowsStreams.containsKey(device.id)
+              ? (code) => _startClipboardSync(device, code)
+              : null,
+          stopSync: _clipboardDeviceId == device.id ? _stopClipboardSync : null,
+        ),
+      );
 
   Future<String> _windowsExitMessage(
     int code,
@@ -341,6 +404,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_connectingId != null || _saving) return;
     setState(() => _connectingId = device.id);
     try {
+      if (_clipboardDeviceId == device.id) _stopClipboardSync();
       await _launcher.quitWindows(device);
       _snack('已请求断开 ${device.name}。');
     } catch (e) {
@@ -844,12 +908,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                               device: device,
                                               panel:
                                                   HostToolPanel.diagnostics)),
-                                      onClipboard: () => showDialog<void>(
-                                        context: context,
-                                        barrierDismissible: false,
-                                        builder: (_) =>
-                                            HostToolsDialog(device: device),
-                                      ),
+                                      onClipboard: () => _showClipboard(device),
                                       onPower: (action) =>
                                           _powerAction(device, action),
                                       onEdit: () => _openAddDevice(device),
