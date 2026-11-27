@@ -65,6 +65,7 @@ class _PairingScreenState extends State<PairingScreen> {
     setState(() {
       _running = true;
       _error = null;
+      _pin = null;
       _message = '正在准备配对…';
     });
     // Store the credentials before pairing starts (secure storage only).
@@ -166,7 +167,9 @@ class _PairingScreenState extends State<PairingScreen> {
             const SizedBox(height: 16),
             PinDisplay(
               pin: _pin!,
-              subtitle: '这个 PIN 已经由 LULU 提交给对方电脑，你不用再去别的地方输入。',
+              subtitle: _error != null
+                  ? '本次配对失败，请重试。'
+                  : 'LULU 会自动提交此 PIN。',
             ),
           ],
           if (_message != null) ...[

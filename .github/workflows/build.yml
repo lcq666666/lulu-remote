@@ -169,6 +169,11 @@ jobs:
             dist/android-apk/*.apk
             dist/windows-installers/vendor/MANIFEST.md
           body: |
+            ### 0.1.2 更新
+
+            - Windows 的「这台电脑」仅显示已连接的物理网卡的局域网地址，并标注网卡名称。跨网地址单独显示。
+            - 修复新版 Sunshine 的 PIN 提交兼容问题。LULU 现在会找到本次配对请求，并检查对方是否接受 PIN。
+
             ### Windows
 
             下载 `LULU-Remote-Setup-*.exe`。每台电脑用同一个安装包。

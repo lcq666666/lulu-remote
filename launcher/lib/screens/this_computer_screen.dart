@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -34,14 +35,31 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
 
   Future<void> _refresh() async {
     final meshAddress = await _network.localMeshAddress();
-    final interfaces =
-        await NetworkInterface.list(type: InternetAddressType.IPv4);
-    final addresses = {
-      for (final interface in interfaces)
-        for (final ip in interface.addresses)
-          if (ip.address != meshAddress && !ip.address.startsWith('169.254.'))
-            ip.address,
-    };
+    final adapters = await Process.run(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          '[Console]::OutputEncoding = [Text.Encoding]::UTF8; '
+              "Get-NetAdapter -Physical | Where-Object Status -eq 'Up' | "
+              'ForEach-Object { Get-NetIPAddress -InterfaceIndex \$_.ifIndex '
+              '-AddressFamily IPv4 -AddressState Preferred -ErrorAction SilentlyContinue } | '
+              "Where-Object { \$_.IPAddress -notlike '169.254.*' } | "
+              'Select-Object IPAddress,InterfaceAlias | ConvertTo-Json -Compress',
+        ],
+        stdoutEncoding: const Utf8Codec(allowMalformed: true));
+    final addresses = <({String label, String address})>[];
+    final output = (adapters.stdout as String).trim();
+    if (adapters.exitCode == 0 && output.isNotEmpty) {
+      final decoded = jsonDecode(output);
+      for (final entry in decoded is List ? decoded : [decoded]) {
+        addresses.add((
+          label: '局域网地址 · ${entry['InterfaceAlias']}',
+          address: entry['IPAddress'] as String,
+        ));
+      }
+    }
     final status = await _network.check(Device(
       id: 'local',
       name: '这台电脑',
@@ -54,7 +72,7 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
       _available = status == HostStatus.online;
       _autoStart = startup.exitCode == 0;
       _addresses = [
-        for (final address in addresses) (label: '局域网地址', address: address),
+        ...addresses,
         if (meshAddress != null) (label: '跨网地址', address: meshAddress),
       ];
     });

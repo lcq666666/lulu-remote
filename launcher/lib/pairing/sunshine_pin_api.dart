@@ -37,45 +37,73 @@ class SunshinePinApi {
     required String pin,
     required String adminUser,
     required String adminPassword,
+    required String requestName,
     String clientName = 'LULU',
   }) async {
     final pairingId = await _waitForPairingId(
       device: device,
       adminUser: adminUser,
       adminPassword: adminPassword,
+      requestName: requestName,
     );
     final body = <String, dynamic>{
       'pin': pin,
       'name': clientName,
-      if (pairingId != null) 'pairing_id': pairingId,
+      'pairing_id': pairingId,
     };
     final client = _client();
     try {
+      final authorization = await client.getUrl(
+        Uri.parse('${device.webBase}/api/csrf-token'),
+      );
+      _auth(authorization, adminUser, adminPassword);
+      final tokenResponse =
+          await authorization.close().timeout(const Duration(seconds: 5));
+      final tokenText = await tokenResponse
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(seconds: 5));
+      if (tokenResponse.statusCode != 200) {
+        throw const HttpException('无法取得对方电脑的 PIN 提交授权。');
+      }
+      final tokenResult = jsonDecode(tokenText);
+      final token = tokenResult is Map ? tokenResult['csrf_token'] : null;
+      if (token is! String || token.isEmpty) {
+        throw const HttpException('对方电脑没有返回 PIN 提交授权。');
+      }
       final request = await client.postUrl(
         Uri.parse('${device.webBase}/api/pin'),
       );
       _auth(request, adminUser, adminPassword);
+      request.headers.set('X-CSRF-Token', token);
       request.headers.contentType = ContentType.json;
       request.write(jsonEncode(body));
-      final response = await request.close();
-      final text = await response.transform(utf8.decoder).join();
+      final response =
+          await request.close().timeout(const Duration(seconds: 5));
+      final text = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(seconds: 5));
       if (response.statusCode != 200) {
         throw HttpException(
-          '提交 PIN 失败：HTTP ${response.statusCode} $text',
+          '提交 PIN 失败：HTTP ${response.statusCode}',
           uri: Uri.parse('${device.webBase}/api/pin'),
         );
       }
+      final result = jsonDecode(text);
+      if (result is! Map || result['status'] != true) {
+        throw const HttpException('对方电脑未接受本次 PIN，请重新配对。');
+      }
     } finally {
-      client.close();
+      client.close(force: true);
     }
   }
 
-  /// Poll GET /api/pin until a pending pairing appears, or return null
-  /// after 30s (older Sunshine accepts a POST without pairing_id).
-  Future<String?> _waitForPairingId({
+  Future<String> _waitForPairingId({
     required Device device,
     required String adminUser,
     required String adminPassword,
+    required String requestName,
   }) async {
     final deadline = DateTime.now().add(const Duration(seconds: 30));
     while (DateTime.now().isBefore(deadline)) {
@@ -85,50 +113,44 @@ class SunshinePinApi {
           Uri.parse('${device.webBase}/api/pin'),
         );
         _auth(request, adminUser, adminPassword);
-        final response = await request.close();
-        final text = await response.transform(utf8.decoder).join();
-        if (response.statusCode == 200) {
-          final id = _extractPairingId(text);
-          if (id != null) return id;
+        final response =
+            await request.close().timeout(const Duration(seconds: 5));
+        final text = await response
+            .transform(utf8.decoder)
+            .join()
+            .timeout(const Duration(seconds: 5));
+        if (response.statusCode == 401 || response.statusCode == 403) {
+          throw const HttpException('对方电脑拒绝了管理账号验证，请检查账号和密码。');
         }
-      } catch (_) {
-        // Host not answering yet — keep polling until the deadline.
+        if (response.statusCode != 200) {
+          throw HttpException('无法读取对方的配对请求（HTTP ${response.statusCode}）。');
+        }
+        final id = _extractPairingId(text, requestName);
+        if (id != null) return id;
       } finally {
-        client.close();
+        client.close(force: true);
       }
       await Future<void>.delayed(const Duration(seconds: 1));
     }
-    return null;
+    throw const HttpException('对方电脑没有显示本次配对请求，请检查地址后重试。');
   }
 
-  /// GET /api/pin returns a JSON array or object; be liberal in what we
-  /// accept — the exact shape varies by Sunshine version (unverified).
-  static String? _extractPairingId(String text) {
-    final trimmed = text.trim();
-    if (trimmed.isEmpty) return null;
-    try {
-      final decoded = jsonDecode(trimmed);
-      if (decoded is List && decoded.isNotEmpty) {
-        final first = decoded.first;
-        if (first is Map) return first['pairing_id'] as String?;
-        if (first is String) return first;
-      }
-      if (decoded is Map) {
-        final id = decoded['pairing_id'];
-        if (id is String) return id;
-        final list = decoded['pairing_requests'];
-        if (list is List && list.isNotEmpty && list.first is Map) {
-          return (list.first as Map)['pairing_id'] as String?;
-        }
-      }
-    } on FormatException {
-      return null;
+  static String? _extractPairingId(String text, String requestName) {
+    final result = jsonDecode(text);
+    if (result is! Map || result['pairings'] is! List) {
+      throw const HttpException('对方电脑的配对接口版本不兼容。');
+    }
+    for (final request in result['pairings'] as List) {
+      if (request is! Map || request['name'] != requestName) continue;
+      final id = request['id'];
+      if (id is String && RegExp(r'^[a-fA-F0-9]{32}$').hasMatch(id)) return id;
     }
     return null;
   }
 
   HttpClient _client() {
     final client = _clientFactory();
+    client.connectionTimeout = const Duration(seconds: 5);
     // TOFU for the PIN submission only — see the trust note above.
     client.badCertificateCallback = (_, __, ___) => true;
     return client;

@@ -107,6 +107,7 @@ class PairingService {
         device: device,
         uniqueId: identity.uniqueId,
         uuid: uuid,
+        requestName: 'LULU-$uuid',
         query: {
           'phrase': 'getservercert',
           'salt': hexEncode(salt),
@@ -114,6 +115,8 @@ class PairingService {
         },
         timeout: null, // Sunshine parks this until the PIN arrives.
       );
+      // Observe an early failure while the PIN request is still in progress.
+      unawaited(phase1.then<void>((_) {}, onError: (Object _, StackTrace __) {}));
       // Give the request a moment to reach Sunshine and register the
       // session before we submit the PIN for it.
       await Future<void>.delayed(const Duration(milliseconds: 500));
@@ -126,6 +129,7 @@ class PairingService {
         pin: pin,
         adminUser: adminUser,
         adminPassword: adminPassword,
+        requestName: 'LULU-$uuid',
       );
 
       // --- Phase 1 returns now that the PIN was submitted ---
@@ -253,7 +257,7 @@ class PairingService {
       emit(PairingPhase.done, '配对成功，以后点连接就行。');
       return PairingResult(device: updated, serverCertDer: serverCertDer);
     } finally {
-      plainClient.close();
+      plainClient.close(force: true);
     }
   }
 
@@ -264,13 +268,14 @@ class PairingService {
     required Device device,
     required String uniqueId,
     required String uuid,
+    String requestName = 'LULU',
     required Map<String, String> query,
     Duration? timeout = const Duration(seconds: 5),
   }) async {
     final params = <String, String>{
       'uniqueid': uniqueId,
       'uuid': uuid,
-      'devicename': 'LULU',
+      'devicename': requestName,
       'updateState': '1',
       ...query,
     };
