@@ -104,8 +104,11 @@ class _ConnectionLogViewState extends State<ConnectionLogView> {
                   ListTile(
                     contentPadding: EdgeInsets.zero,
                     title: Text('${row.kindLabel} · ${row.clientLabel}'),
-                    subtitle: Text(
-                        '${connectionTime(row.start)} 至 ${connectionTime(row.end)}'),
+                    subtitle: Text([
+                      '${connectionTime(row.start)} 至 ${connectionTime(row.end)}',
+                      if (row.issue case final issue?) issue.label,
+                    ].join('\n')),
+                    isThreeLine: row.issue != null,
                     trailing: Text(
                         '${row.duration.inSeconds} 秒 · ${row.outcomeLabel}'),
                   ),

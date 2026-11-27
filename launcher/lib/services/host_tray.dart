@@ -204,13 +204,18 @@ class HostTray {
                 name: name,
                 address: request.address,
                 confirm: (pin) async {
-                  final current = await _api.listPairings(
-                      _local, account.user, account.password);
-                  if (generation != _generation ||
-                      !current.any((entry) => entry.id == request.id)) {
-                    throw const HttpException('请求已结束，请让对方重新发起。');
-                  }
+                  final log = ConnectionLog.instance;
+                  log.pairingApprovalStarted(request.id);
+                  var issue = ConnectionIssue.pairingLookup;
                   try {
+                    final current = await _api.listPairings(
+                        _local, account.user, account.password);
+                    if (generation != _generation ||
+                        !current.any((entry) => entry.id == request.id)) {
+                      issue = ConnectionIssue.pairingEnded;
+                      throw const HttpException('请求已结束，请让对方重新发起。');
+                    }
+                    issue = ConnectionIssue.pairingApproval;
                     await _api.approveRequest(
                         device: _local,
                         pin: pin,
@@ -218,10 +223,13 @@ class HostTray {
                         adminPassword: account.password,
                         pairingId: request.id,
                         clientName: name);
-                    unawaited(
-                        ConnectionLog.instance.pairingCompleted(request.id));
+                    if (generation == _generation) {
+                      unawaited(log.pairingCompleted(request.id));
+                    }
                   } catch (_) {
-                    ConnectionLog.instance.pairingFailed(request.id);
+                    if (generation == _generation) {
+                      unawaited(log.pairingFailed(request.id, issue));
+                    }
                     rethrow;
                   }
                 },

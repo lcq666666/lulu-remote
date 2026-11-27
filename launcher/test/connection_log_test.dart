@@ -35,7 +35,7 @@ void main() {
     log.pairingSeen('one', '实验室电脑');
     await log.pairingCompleted('one');
     log.pairingSeen('two', '便携机\n第三方字段');
-    log.pairingFailed('two');
+    await log.pairingFailed('two', ConnectionIssue.pairingApproval);
     await log.pairingSample([]);
     final rows = await log.read();
     expect(rows, hasLength(2));
@@ -52,7 +52,67 @@ void main() {
     final text = await exported.readAsString();
     expect(text.split('\n'), hasLength(4));
     expect(text, contains('实验室电脑'));
-    expect(text, contains('配对未通过'));
+    expect(text, contains('配对未通过 · 未收到 Sunshine 的配对确认'));
     expect(text, contains('便携机 第三方字段'));
+  });
+
+  test('keeps a pending approval until its result arrives', () async {
+    final log = ConnectionLog();
+    const request = (id: 'one', name: '实验室电脑', address: '100.64.12.1');
+    await log.pairingSample([request]);
+    log.pairingApprovalStarted(request.id);
+    await log.pairingSample([]);
+    expect(await log.read(), isEmpty);
+    await log.pairingCompleted(request.id);
+    expect((await ConnectionLog().read()).single.outcome,
+        ConnectionOutcome.completed);
+  });
+
+  test('finalizes failed approval after the request disappears', () async {
+    final log = ConnectionLog();
+    const request = (id: 'one', name: '实验室电脑', address: '100.64.12.1');
+    await log.pairingSample([request]);
+    log.pairingApprovalStarted(request.id);
+    await log.pairingSample([]);
+    await log.pairingFailed(request.id, ConnectionIssue.pairingLookup);
+    final row = (await ConnectionLog().read()).single;
+    expect(row.issue, ConnectionIssue.pairingLookup);
+    expect(row.outcome, ConnectionOutcome.failed);
+    expect(row.toJson().values, isNot(contains(request.address)));
+  });
+
+  test('ignores an old polling result after approval succeeds', () async {
+    final log = ConnectionLog();
+    const request = (id: 'one', name: '实验室电脑', address: '100.64.12.1');
+    await log.pairingSample([request]);
+    log.pairingApprovalStarted(request.id);
+    await log.pairingCompleted(request.id);
+    await log.pairingSample([request]);
+    await log.pairingSample([]);
+    expect((await log.read()).single.outcome, ConnectionOutcome.completed);
+  });
+
+  test('keeps a confirmed expired request from reappearing', () async {
+    final log = ConnectionLog();
+    const request = (id: 'one', name: '实验室电脑', address: '100.64.12.1');
+    await log.pairingSample([request]);
+    log.pairingApprovalStarted(request.id);
+    await log.pairingFailed(request.id, ConnectionIssue.pairingEnded);
+    await log.pairingSample([request]);
+    await log.pairingSample([]);
+    expect((await log.read()).single.issue, ConnectionIssue.pairingEnded);
+  });
+
+  test('reads a preexisting entry without an issue', () {
+    final row = ConnectionEntry.fromJson({
+      'kind': 'pairing',
+      'start': '2026-11-28T00:00:00Z',
+      'end': '2026-11-28T00:00:02Z',
+      'client': '旧设备',
+      'result': 'failed',
+    });
+    expect(row.issue, isNull);
+    expect(row.duration.inSeconds, 2);
+    expect(row.outcomeLabel, '配对未通过');
   });
 }

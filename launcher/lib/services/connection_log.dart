@@ -6,6 +6,21 @@ enum ConnectionKind { pairing, streaming }
 
 enum ConnectionOutcome { completed, expired, failed, interrupted }
 
+enum ConnectionIssue {
+  pairingLookup,
+  pairingEnded,
+  pairingApproval;
+
+  String get label => switch (this) {
+        pairingLookup => '无法核对 Sunshine 配对请求',
+        pairingEnded => '配对请求已结束',
+        pairingApproval => '未收到 Sunshine 的配对确认',
+      };
+
+  static ConnectionIssue? read(Object? name) =>
+      values.where((value) => value.name == name).firstOrNull;
+}
+
 String cleanConnectionName(String name) {
   final text = name
       .replaceFirst(RegExp(r' · LULU-[a-f0-9]{32}$'), '')
@@ -16,7 +31,8 @@ String cleanConnectionName(String name) {
 
 class ConnectionEntry {
   const ConnectionEntry(
-      this.kind, this.start, this.end, this.client, this.outcome);
+      this.kind, this.start, this.end, this.client, this.outcome,
+      {this.issue});
 
   factory ConnectionEntry.fromJson(Map<String, dynamic> json) =>
       ConnectionEntry(
@@ -25,6 +41,7 @@ class ConnectionEntry {
         DateTime.parse(json['end'] as String),
         cleanConnectionName(json['client'] as String),
         ConnectionOutcome.values.byName(json['result'] as String),
+        issue: ConnectionIssue.read(json['issue']),
       );
 
   final ConnectionKind kind;
@@ -32,6 +49,7 @@ class ConnectionEntry {
   final DateTime end;
   final String client;
   final ConnectionOutcome outcome;
+  final ConnectionIssue? issue;
 
   Duration get duration =>
       end.isBefore(start) ? Duration.zero : end.difference(start);
@@ -42,6 +60,7 @@ class ConnectionEntry {
         'end': end.toUtc().toIso8601String(),
         'client': cleanConnectionName(client),
         'result': outcome.name,
+        if (issue case final issue?) 'issue': issue.name,
       };
 
   String get kindLabel => switch (kind) {
@@ -57,6 +76,16 @@ class ConnectionEntry {
   String get clientLabel => client.isEmpty ? '未识别控制端' : client;
 }
 
+class _PairingAttempt {
+  _PairingAttempt(this.starts, this.name);
+
+  final DateTime starts;
+  final String name;
+  bool present = true;
+  bool approving = false;
+  ConnectionIssue? issue;
+}
+
 class ConnectionLog {
   ConnectionLog({DateTime Function()? now}) : _now = now ?? DateTime.now;
 
@@ -65,7 +94,8 @@ class ConnectionLog {
   final DateTime Function() _now;
   Future<void> _writes = Future<void>.value();
   DateTime? _streamStart;
-  final _pairing = <String, ({DateTime starts, String name, bool failed})>{};
+  final _pairing = <String, _PairingAttempt>{};
+  final _finishedRequests = <String>{};
 
   Future<List<ConnectionEntry>> read() async {
     await _writes;
@@ -110,43 +140,58 @@ class ConnectionLog {
   }
 
   void pairingSeen(String id, String client) {
+    if (_finishedRequests.contains(id)) return;
     _pairing.putIfAbsent(
-        id,
-        () =>
-            (starts: _now(), name: cleanConnectionName(client), failed: false));
+        id, () => _PairingAttempt(_now(), cleanConnectionName(client)));
   }
 
-  void pairingFailed(String id) {
-    if (_pairing[id] case final attempt?) {
-      _pairing[id] = (starts: attempt.starts, name: attempt.name, failed: true);
+  void pairingApprovalStarted(String id) {
+    _pairing[id]?.approving = true;
+  }
+
+  Future<void> pairingFailed(String id, ConnectionIssue issue) async {
+    final attempt = _pairing[id];
+    if (attempt == null) return;
+    attempt.approving = false;
+    attempt.issue = issue;
+    if (!attempt.present || issue == ConnectionIssue.pairingEnded) {
+      await _finishPairing(id);
     }
   }
 
-  Future<void> pairingCompleted(String id) async {
+  Future<void> _finishPairing(String id, {bool completed = false}) async {
     final attempt = _pairing.remove(id);
     if (attempt == null) return;
-    await _append(ConnectionEntry(ConnectionKind.pairing, attempt.starts,
-        _now(), attempt.name, ConnectionOutcome.completed));
+    if (attempt.present) _finishedRequests.add(id);
+    final issue = completed ? null : attempt.issue;
+    final outcome = completed
+        ? ConnectionOutcome.completed
+        : issue == null
+            ? ConnectionOutcome.expired
+            : ConnectionOutcome.failed;
+    await _append(ConnectionEntry(
+        ConnectionKind.pairing, attempt.starts, _now(), attempt.name, outcome,
+        issue: issue));
   }
+
+  Future<void> pairingCompleted(String id) =>
+      _finishPairing(id, completed: true);
 
   Future<void> pairingSample(
       Iterable<({String id, String name, String address})> requests) async {
     final active = requests.map((request) => request.id).toSet();
+    _finishedRequests.retainAll(active);
     for (final request in requests) {
       pairingSeen(request.id, request.name);
     }
-    final expired = _pairing.keys.where((id) => !active.contains(id)).toList();
-    for (final id in expired) {
-      final attempt = _pairing.remove(id)!;
-      await _append(ConnectionEntry(
-          ConnectionKind.pairing,
-          attempt.starts,
-          _now(),
-          attempt.name,
-          attempt.failed
-              ? ConnectionOutcome.failed
-              : ConnectionOutcome.expired));
+    final expired = <String>[];
+    for (final entry in _pairing.entries) {
+      entry.value.present = active.contains(entry.key);
+      if (!entry.value.present && !entry.value.approving) {
+        expired.add(entry.key);
+      }
     }
+    await Future.wait(expired.map((id) => _finishPairing(id)));
   }
 
   Future<void> stop() async {
@@ -154,6 +199,7 @@ class ConnectionLog {
     _streamStart = null;
     final attempts = _pairing.values.toList();
     _pairing.clear();
+    _finishedRequests.clear();
     final now = _now();
     if (start != null) {
       await _append(ConnectionEntry(ConnectionKind.streaming, start, now, '',
@@ -168,8 +214,9 @@ class ConnectionLog {
   static String exportText(Iterable<ConnectionEntry> entries) {
     final text = StringBuffer('强哥远程连接记录\n');
     for (final row in entries) {
+      final detail = row.issue == null ? '' : ' · ${row.issue!.label}';
       text.writeln('${connectionTime(row.start)}  ${connectionTime(row.end)}  '
-          '${row.kindLabel}  ${row.clientLabel}  ${row.duration.inSeconds} 秒  ${row.outcomeLabel}');
+          '${row.kindLabel}  ${row.clientLabel}  ${row.duration.inSeconds} 秒  ${row.outcomeLabel}$detail');
     }
     return text.toString();
   }
