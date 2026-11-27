@@ -1,24 +1,16 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 
 import '../app.dart';
 import '../models/device.dart';
-import '../models/quality_preset.dart';
 import '../services/mesh_status_service.dart';
 
-/// One host card: name, paired badge, mesh address, current preset,
-/// online dot, and the connect button. Unpaired devices show the
-/// in-app pairing hint instead of a bare "connect" dead end.
 class DeviceCard extends StatelessWidget {
   const DeviceCard({
     super.key,
     required this.device,
-    required this.preset,
     required this.status,
     required this.connecting,
     required this.onConnect,
-    required this.onPair,
     this.onEdit,
     this.onDelete,
     this.onDisconnect,
@@ -26,11 +18,9 @@ class DeviceCard extends StatelessWidget {
   });
 
   final Device device;
-  final QualityPreset preset;
   final HostStatus? status;
   final bool connecting;
   final VoidCallback onConnect;
-  final VoidCallback onPair;
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
   final VoidCallback? onDisconnect;
@@ -66,7 +56,6 @@ class DeviceCard extends StatelessWidget {
                     ),
                   ),
                 ),
-                _PairedBadge(paired: device.paired),
                 PopupMenuButton<String>(
                   tooltip: '电脑操作',
                   enabled: onEdit != null && onDelete != null,
@@ -86,30 +75,20 @@ class DeviceCard extends StatelessWidget {
             ),
             const SizedBox(height: 10),
             Text(
-              device.meshAddress,
+              status?.label ?? '尚未检查连接状态',
               style: const TextStyle(color: LuluTheme.muted),
             ),
-            Text(
-              '当前预设 ${preset.summary}',
-              style: const TextStyle(color: LuluTheme.muted),
-            ),
-            if (status != null)
-              Text(
-                '状态：${status!.label}',
-                style: const TextStyle(color: LuluTheme.muted),
-              ),
-            if (Platform.isAndroid || Platform.isWindows)
-              Text(
-                Platform.isAndroid ? '首次连接需要在手机串流应用内配对。' : '选择「进入桌面」连接这台电脑。',
-                style: const TextStyle(color: LuluTheme.muted),
-              ),
             const SizedBox(height: 12),
             Wrap(
               spacing: 12,
               children: [
                 ElevatedButton(
                   onPressed: connecting ? null : onConnect,
-                  child: Text(connecting ? '连接中…' : '进入桌面'),
+                  child: Text(connecting
+                      ? '连接中…'
+                      : device.paired
+                          ? '进入桌面'
+                          : '首次连接'),
                 ),
                 if (onDisconnect != null)
                   OutlinedButton(
@@ -119,55 +98,11 @@ class DeviceCard extends StatelessWidget {
                 if (onAndroidHelp != null)
                   TextButton(
                     onPressed: connecting ? null : onAndroidHelp,
-                    child: const Text('Moonlight 连接帮助'),
+                    child: const Text('连接遇到问题'),
                   ),
-                if (!device.paired) ...[
-                  TextButton(
-                    onPressed: onPair,
-                    child: const Text('开始配对'),
-                  ),
-                ],
               ],
             ),
-            if (!device.paired) ...[
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: LuluTheme.warningBg,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Text(
-                  '首次连接需要配对，请准备对方电脑的管理账号。',
-                  style: TextStyle(color: LuluTheme.warningText),
-                ),
-              ),
-            ],
           ],
-        ),
-      ),
-    );
-  }
-}
-
-class _PairedBadge extends StatelessWidget {
-  const _PairedBadge({required this.paired});
-  final bool paired;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color:
-            paired ? LuluTheme.accent.withOpacity(0.15) : LuluTheme.warningBg,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(
-        paired ? '已配对' : '未配对',
-        style: TextStyle(
-          color: paired ? LuluTheme.accent : LuluTheme.warningText,
-          fontWeight: FontWeight.bold,
         ),
       ),
     );

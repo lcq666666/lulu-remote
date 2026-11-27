@@ -325,11 +325,15 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _openThisComputer() {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => const ThisComputerScreen(),
+    ));
+  }
+
   void _openSettings() {
     Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => Platform.isWindows
-          ? const ThisComputerScreen()
-          : const SetupChecklistScreen(),
+      builder: (_) => const SetupChecklistScreen(),
     ));
   }
 
@@ -344,7 +348,7 @@ class _HomeScreenState extends State<HomeScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.settings_outlined),
-            tooltip: Platform.isWindows ? '这台电脑与设置' : '设置',
+            tooltip: '连接设置',
             onPressed: _openSettings,
           ),
           IconButton(
@@ -357,70 +361,76 @@ class _HomeScreenState extends State<HomeScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : LayoutBuilder(builder: (context, constraints) {
-              final wide = constraints.maxWidth >= 760;
-              final content = Column(
+              final wide = Platform.isWindows && constraints.maxWidth >= 760;
+              final content = ListView(
+                padding: const EdgeInsets.all(16),
                 children: [
-                  if (Platform.isWindows)
-                    _PresetBar(
-                      selected: _preset,
-                      onSelected: (p) => setState(() => _preset = p),
-                    ),
-                  Expanded(
-                    child: ListView(
-                      padding: const EdgeInsets.all(16),
-                      children: [
-                        Row(
-                          children: [
-                            const Text(
-                              '我的电脑',
-                              style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                                color: LuluTheme.text,
-                              ),
-                            ),
-                            const Spacer(),
-                            ElevatedButton.icon(
-                              onPressed: _saving ? null : _openAddDevice,
-                              icon: const Icon(Icons.add),
-                              label: const Text('添加电脑'),
-                            ),
-                          ],
+                  Row(
+                    children: [
+                      const Expanded(
+                          child: Text(
+                        '连接电脑',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: LuluTheme.text,
                         ),
-                        const SizedBox(height: 12),
-                        if (_devices.isEmpty)
-                          const ListTile(
-                            leading: Icon(Icons.desktop_windows_outlined),
-                            title: Text('还没有添加电脑'),
-                            subtitle: Text('在要控制的电脑上打开 LULU，复制「这台电脑」里的地址。'),
-                          ),
-                        for (final device in _devices) ...[
-                          DeviceCard(
-                            device: device,
-                            preset: _preset,
-                            status: _status[device.id],
-                            connecting: _connectingId == device.id || _saving,
-                            onConnect: () => _connect(device),
-                            onPair: () => _openPairing(device),
-                            onEdit:
-                                _saving ? null : () => _openAddDevice(device),
-                            onDelete:
-                                _saving ? null : () => _deleteDevice(device),
-                            onDisconnect: Platform.isWindows && device.paired
-                                ? () => _disconnectWindows(device)
-                                : null,
-                            onAndroidHelp: Platform.isAndroid && device.paired
-                                ? () => _showAndroidHelp(device)
-                                : null,
-                          ),
-                          const SizedBox(height: 12),
-                        ],
+                      )),
+                      ElevatedButton.icon(
+                        onPressed: _saving ? null : _openAddDevice,
+                        icon: const Icon(Icons.add),
+                        label: const Text('添加电脑'),
+                      ),
+                    ],
+                  ),
+                  if (Platform.isWindows && !wide)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: _openThisComputer,
+                        icon: const Icon(Icons.desktop_windows_outlined),
+                        label: const Text('让别人连接我'),
+                      ),
+                    ),
+                  const SizedBox(height: 12),
+                  if (_devices.isEmpty)
+                    const ListTile(
+                      leading: Icon(Icons.desktop_windows_outlined),
+                      title: Text('还没有添加电脑'),
+                    ),
+                  for (final device in _devices) ...[
+                    DeviceCard(
+                      device: device,
+                      status: _status[device.id],
+                      connecting: _connectingId == device.id || _saving,
+                      onConnect: () => _connect(device),
+                      onEdit: _saving ? null : () => _openAddDevice(device),
+                      onDelete: _saving ? null : () => _deleteDevice(device),
+                      onDisconnect: Platform.isWindows && device.paired
+                          ? () => _disconnectWindows(device)
+                          : null,
+                      onAndroidHelp: Platform.isAndroid && device.paired
+                          ? () => _showAndroidHelp(device)
+                          : null,
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  if (Platform.isWindows && _devices.isNotEmpty)
+                    ExpansionTile(
+                      tilePadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.tune),
+                      title: const Text('连接画质'),
+                      subtitle: Text(_preset.summary),
+                      children: [
+                        _PresetBar(
+                          selected: _preset,
+                          onSelected: (p) => setState(() => _preset = p),
+                        ),
                       ],
                     ),
-                  ),
                 ],
               );
-              if (!wide || !Platform.isWindows) return content;
+              if (!wide) return content;
               return Row(
                 children: [
                   SizedBox(
@@ -431,12 +441,12 @@ class _HomeScreenState extends State<HomeScreen> {
                         const ListTile(
                           selected: true,
                           leading: Icon(Icons.devices_outlined),
-                          title: Text('我的电脑'),
+                          title: Text('连接电脑'),
                         ),
                         ListTile(
                           leading: const Icon(Icons.desktop_windows_outlined),
-                          title: const Text('这台电脑'),
-                          onTap: _openSettings,
+                          title: const Text('让别人连接我'),
+                          onTap: _openThisComputer,
                         ),
                       ],
                     ),

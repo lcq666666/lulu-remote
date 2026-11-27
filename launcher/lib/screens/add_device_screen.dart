@@ -108,7 +108,7 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
                 decoration: const InputDecoration(
                   labelText: '对方电脑的地址',
                   hintText: '例如 192.168.1.23',
-                  helperText: '在对方电脑打开 LULU，复制「这台电脑」里的地址。',
+                  helperText: '请对方在 LULU 的「让别人连接我」中复制地址。',
                   helperMaxLines: 2,
                 ),
               ),

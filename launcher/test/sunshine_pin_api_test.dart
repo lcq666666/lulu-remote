@@ -21,15 +21,18 @@ void main() {
     addTearDown(() => server.close(force: true));
     const pairingId = '0123456789abcdef0123456789abcdef';
     final posts = <({String? token, Object? payload})>[];
+    final events = <String>[];
     server.listen((request) async {
       final Object response;
       if (request.method == 'POST') {
+        events.add('posted');
         posts.add((
           token: request.headers.value('X-CSRF-Token'),
           payload: jsonDecode(await utf8.decoder.bind(request).join()),
         ));
         response = {'status': posts.length == 1};
       } else if (request.uri.path == '/api/csrf-token') {
+        events.add('csrf');
         response = {'csrf_token': 'test-token'};
       } else {
         response = {
@@ -49,9 +52,11 @@ void main() {
           adminUser: 'test',
           adminPassword: 'test',
           requestName: 'LULU-this-request',
+          onRequestFound: () => events.add('found'),
         );
 
     await submit();
+    expect(events, ['found', 'csrf', 'posted']);
     expect(posts.single.token, 'test-token');
     expect(posts.single.payload, {
       'pin': '0123',
@@ -59,5 +64,41 @@ void main() {
       'pairing_id': pairingId,
     });
     await expectLater(submit(), throwsA(isA<HttpException>()));
+  });
+
+  test('distinguishes rejected credentials from blocked network access',
+      () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => server.close(force: true));
+    var status = HttpStatus.unauthorized;
+    server.listen((request) async {
+      request.response.statusCode = status;
+      await request.response.close();
+    });
+    final api = SunshinePinApi();
+
+    Future<void> verify() => api.verifyAccount(
+          device: _LocalDevice(server.port),
+          adminUser: 'test',
+          adminPassword: 'test',
+        );
+
+    await expectLater(
+      verify(),
+      throwsA(isA<HttpException>().having(
+        (error) => error.message,
+        'message',
+        contains('账号或密码'),
+      )),
+    );
+    status = HttpStatus.forbidden;
+    await expectLater(
+      verify(),
+      throwsA(isA<HttpException>().having(
+        (error) => error.message,
+        'message',
+        contains('访问范围'),
+      )),
+    );
   });
 }

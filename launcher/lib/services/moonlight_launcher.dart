@@ -22,6 +22,14 @@ import '../models/quality_preset.dart';
 class MoonlightLauncher {
   static const _channel = MethodChannel('lulu.remote/launch');
 
+  Future<bool> isInstalled() async {
+    if (Platform.isWindows) return await findMoonlightQt() != null;
+    if (Platform.isAndroid) {
+      return await _channel.invokeMethod<bool>('isMoonlightInstalled') ?? false;
+    }
+    return false;
+  }
+
   /// Known install locations for moonlight-qt.exe on Windows, checked in
   /// order before falling back to PATH (`where moonlight-qt`).
   static const windowsSearchPaths = [

@@ -7,6 +7,7 @@
 // The admin credentials are entered once in LULU and stored only in the
 // OS secure store (SecureStore); they are never logged or written to a file.
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -17,6 +18,14 @@ class SunshinePinApi {
       : _clientFactory = clientFactory ?? HttpClient.new;
 
   final HttpClient Function() _clientFactory;
+
+  Future<void> verifyAccount({
+    required Device device,
+    required String adminUser,
+    required String adminPassword,
+  }) async {
+    await _listPairings(device, adminUser, adminPassword);
+  }
 
   /// Submit [pin] for the pending pairing session on [device].
   ///
@@ -39,13 +48,17 @@ class SunshinePinApi {
     required String adminPassword,
     required String requestName,
     String clientName = 'LULU',
+    void Function()? onRequestFound,
+    void Function()? checkPendingRequest,
   }) async {
     final pairingId = await _waitForPairingId(
       device: device,
       adminUser: adminUser,
       adminPassword: adminPassword,
       requestName: requestName,
+      checkPendingRequest: checkPendingRequest,
     );
+    onRequestFound?.call();
     final body = <String, dynamic>{
       'pin': pin,
       'name': clientName,
@@ -59,13 +72,11 @@ class SunshinePinApi {
       _auth(authorization, adminUser, adminPassword);
       final tokenResponse =
           await authorization.close().timeout(const Duration(seconds: 5));
+      _requireManagementAccess(tokenResponse.statusCode);
       final tokenText = await tokenResponse
           .transform(utf8.decoder)
           .join()
           .timeout(const Duration(seconds: 5));
-      if (tokenResponse.statusCode != 200) {
-        throw const HttpException('无法取得对方电脑的 PIN 提交授权。');
-      }
       final tokenResult = jsonDecode(tokenText);
       final token = tokenResult is Map ? tokenResult['csrf_token'] : null;
       if (token is! String || token.isEmpty) {
@@ -74,12 +85,16 @@ class SunshinePinApi {
       final request = await client.postUrl(
         Uri.parse('${device.webBase}/api/pin'),
       );
+      checkPendingRequest?.call();
       _auth(request, adminUser, adminPassword);
       request.headers.set('X-CSRF-Token', token);
       request.headers.contentType = ContentType.json;
       request.write(jsonEncode(body));
       final response =
           await request.close().timeout(const Duration(seconds: 5));
+      if (response.statusCode == 401) {
+        _requireManagementAccess(response.statusCode);
+      }
       final text = await response
           .transform(utf8.decoder)
           .join()
@@ -104,48 +119,74 @@ class SunshinePinApi {
     required String adminUser,
     required String adminPassword,
     required String requestName,
+    void Function()? checkPendingRequest,
   }) async {
     final deadline = DateTime.now().add(const Duration(seconds: 30));
     while (DateTime.now().isBefore(deadline)) {
-      final client = _client();
-      try {
-        final request = await client.getUrl(
-          Uri.parse('${device.webBase}/api/pin'),
-        );
-        _auth(request, adminUser, adminPassword);
-        final response =
-            await request.close().timeout(const Duration(seconds: 5));
-        final text = await response
-            .transform(utf8.decoder)
-            .join()
-            .timeout(const Duration(seconds: 5));
-        if (response.statusCode == 401 || response.statusCode == 403) {
-          throw const HttpException('对方电脑拒绝了管理账号验证，请检查账号和密码。');
+      checkPendingRequest?.call();
+      final requests = await _listPairings(device, adminUser, adminPassword);
+      checkPendingRequest?.call();
+      for (final request in requests) {
+        if (request is! Map || request['name'] != requestName) continue;
+        final id = request['id'];
+        if (id is String && RegExp(r'^[a-fA-F0-9]{32}$').hasMatch(id)) {
+          return id;
         }
-        if (response.statusCode != 200) {
-          throw HttpException('无法读取对方的配对请求（HTTP ${response.statusCode}）。');
-        }
-        final id = _extractPairingId(text, requestName);
-        if (id != null) return id;
-      } finally {
-        client.close(force: true);
       }
       await Future<void>.delayed(const Duration(seconds: 1));
     }
-    throw const HttpException('对方电脑没有显示本次配对请求，请检查地址后重试。');
+    checkPendingRequest?.call();
+    throw const HttpException('对方未登记本次配对请求。请确认对方开启了远程服务，再重试。');
   }
 
-  static String? _extractPairingId(String text, String requestName) {
-    final result = jsonDecode(text);
-    if (result is! Map || result['pairings'] is! List) {
-      throw const HttpException('对方电脑的配对接口版本不兼容。');
+  Future<List<dynamic>> _listPairings(
+    Device device,
+    String user,
+    String password,
+  ) async {
+    final client = _client();
+    try {
+      final request =
+          await client.getUrl(Uri.parse('${device.webBase}/api/pin'));
+      _auth(request, user, password);
+      final response =
+          await request.close().timeout(const Duration(seconds: 5));
+      _requireManagementAccess(response.statusCode);
+      final text = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(seconds: 5));
+      final result = jsonDecode(text);
+      if (result is! Map || result['pairings'] is! List) {
+        throw const HttpException('对方电脑的配对接口版本不兼容。');
+      }
+      return result['pairings'] as List<dynamic>;
+    } on SocketException {
+      throw HttpException(
+          '远程服务可达，但无法访问对方的管理端口 ${device.webPort}。请检查对方的防火墙和管理端口。');
+    } on TimeoutException {
+      throw HttpException('等待对方的管理端口 ${device.webPort} 超时。请检查跨网访问权限和防火墙。');
+    } on FormatException {
+      throw const HttpException('对方的管理入口返回了无法识别的响应。');
+    } finally {
+      client.close(force: true);
     }
-    for (final request in result['pairings'] as List) {
-      if (request is! Map || request['name'] != requestName) continue;
-      final id = request['id'];
-      if (id is String && RegExp(r'^[a-fA-F0-9]{32}$').hasMatch(id)) return id;
+  }
+
+  static void _requireManagementAccess(int status) {
+    if (status == 401) {
+      throw const HttpException('管理账号或密码未通过验证（401）。请填写被控电脑的 Sunshine 账号和密码。');
     }
-    return null;
+    if (status == 403) {
+      throw const HttpException(
+          '对方的管理页面拒绝了这条网络连接（403）。请在被控电脑检查 Sunshine 的管理页面访问范围。');
+    }
+    if (status >= 300 && status < 400) {
+      throw const HttpException('请先在被控电脑设置 Sunshine 管理账号。');
+    }
+    if (status != 200) {
+      throw HttpException('对方的管理入口返回 HTTP $status。请检查管理端口和 Sunshine 版本。');
+    }
   }
 
   HttpClient _client() {
@@ -157,6 +198,7 @@ class SunshinePinApi {
   }
 
   static void _auth(HttpClientRequest request, String user, String password) {
+    request.followRedirects = false;
     final credentials = base64Encode(utf8.encode('$user:$password'));
     request.headers.set(HttpHeaders.authorizationHeader, 'Basic $credentials');
   }

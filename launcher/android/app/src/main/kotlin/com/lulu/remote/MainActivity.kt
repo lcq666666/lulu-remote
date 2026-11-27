@@ -37,6 +37,9 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channel)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
+                    "isMoonlightInstalled" -> {
+                        result.success(packageManager.getLaunchIntentForPackage("com.limelight") != null)
+                    }
                     "launchGame" -> {
                         val host = call.argument<String>("host") ?: ""
                         val port = call.argument<Int>("port") ?: 47989
