@@ -34,6 +34,7 @@ class FileTransferHost {
   HostToolsServer? _tools;
   Future<String>? _readingToolsCode;
   static const _clipboardKey = 'qg_clipboard_enabled';
+  static const _diagnosticsKey = 'qg_diagnostics_enabled';
   Future<String>? _readingCode;
   int _settingsGeneration = 0;
   Timer? _timer;
@@ -150,6 +151,30 @@ class FileTransferHost {
     await refresh();
   }
 
+  Future<bool> diagnosticsEnabled() async =>
+      (await SharedPreferences.getInstance()).getBool(_diagnosticsKey) ?? false;
+
+  Future<void> setDiagnosticsEnabled(bool enabled) async {
+    _settingsGeneration++;
+    if (!enabled) _tools?.diagnosticsEnabled = false;
+    final prefs = await SharedPreferences.getInstance();
+    if (!await prefs.setBool(_diagnosticsKey, enabled)) {
+      await prefs.reload();
+      throw StateError('无法保存连接诊断设置。');
+    }
+    await refresh();
+  }
+
+  Future<String> _diagnostics() async {
+    var listening = true;
+    try {
+      await MeshStatusService().verifyLocalHost();
+    } on StateError {
+      listening = false;
+    }
+    return '电脑名称：${Platform.localHostname}\n远程服务：${listening ? '有应答' : '未就绪'}';
+  }
+
   Future<String> toolsCode() => _readingToolsCode ??=
       _loadToolsCode().whenComplete(() => _readingToolsCode = null);
 
@@ -207,7 +232,9 @@ class FileTransferHost {
       final fileEnabled = await isEnabled();
       final powerEnabled = await PowerAccess.instance.isEnabled();
       final clipboard = await clipboardEnabled();
-      if (_timer == null || !(fileEnabled || powerEnabled || clipboard)) {
+      final diagnostics = await diagnosticsEnabled();
+      if (_timer == null ||
+          !(fileEnabled || powerEnabled || clipboard || diagnostics)) {
         await _disableCurrent();
         return;
       }
@@ -215,7 +242,7 @@ class FileTransferHost {
       final secret = fileEnabled ? await code() : null;
       final powerSecret =
           powerEnabled ? await PowerAccess.instance.code() : null;
-      final toolsSecret = clipboard ? await toolsCode() : null;
+      final toolsSecret = clipboard || diagnostics ? await toolsCode() : null;
       final addresses = (await MeshStatusService().localAddresses())
           .where((entry) =>
               entry.network != null && isPrivateTransferAddress(entry.address))
@@ -245,12 +272,16 @@ class FileTransferHost {
         _disableTools();
         _tools = HostToolsServer(
           code: toolsSecret,
+          readDiagnostics: _diagnostics,
           readClipboard: () async =>
               (await Clipboard.getData(Clipboard.kTextPlain))?.text ?? '',
           writeClipboard: (text) =>
               Clipboard.setData(ClipboardData(text: text)),
-        )..clipboardEnabled = clipboard;
+        );
       }
+      _tools
+        ?..clipboardEnabled = clipboard
+        ..diagnosticsEnabled = diagnostics;
       final expired = _listeners.keys
           .where((address) => !addresses.contains(address))
           .toList();

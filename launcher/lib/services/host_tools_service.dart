@@ -51,17 +51,29 @@ class HostToolsServer {
   HostToolsServer(
       {required this.code,
       required this.readClipboard,
-      required this.writeClipboard});
+      required this.writeClipboard,
+      this.readDiagnostics});
 
   final String code;
   final Future<String> Function() readClipboard;
   final Future<void> Function(String) writeClipboard;
+  final Future<String> Function()? readDiagnostics;
   bool clipboardEnabled = false;
+  bool diagnosticsEnabled = false;
   bool active = true;
   final _issued = <String, Duration>{};
   final _usedHellos = <String, Duration>{};
   final _clock = Stopwatch()..start();
   int _pending = 0;
+
+  bool _allows(String operation) =>
+      active &&
+      switch (operation) {
+        'challenge' => clipboardEnabled || diagnosticsEnabled,
+        'clipboard-read' || 'clipboard-write' => clipboardEnabled,
+        'diagnostics' => diagnosticsEnabled && readDiagnostics != null,
+        _ => false,
+      };
 
   static bool handles(String path) => path.startsWith(_path);
 
@@ -73,15 +85,19 @@ class HostToolsServer {
     var counted = false;
     try {
       final operation = request.uri.path.substring(_path.length);
-      if (!active || !clipboardEnabled) {
+      if (!_allows(operation)) {
         response.statusCode = HttpStatus.forbidden;
         return;
       }
       final id = request.headers.value('x-qg-request') ?? '';
       if (request.method != 'POST' ||
           !validTransferCode(id) ||
-          !const {'challenge', 'clipboard-read', 'clipboard-write'}
-              .contains(operation)) {
+          !const {
+            'challenge',
+            'clipboard-read',
+            'clipboard-write',
+            'diagnostics'
+          }.contains(operation)) {
         response.statusCode = HttpStatus.badRequest;
         return;
       }
@@ -99,7 +115,7 @@ class HostToolsServer {
       final binding = '$operation/$id';
       final plaintext = await _open(code, 'request', binding,
           await _read(request, limit).timeout(_timeout));
-      if (!active || !clipboardEnabled) {
+      if (!_allows(operation)) {
         response.statusCode = HttpStatus.forbidden;
         return;
       }
@@ -123,7 +139,9 @@ class HostToolsServer {
           response.statusCode = HttpStatus.unauthorized;
           return;
         }
-        if (operation == 'clipboard-read') {
+        if (operation == 'diagnostics') {
+          result = utf8.encode(await readDiagnostics!().timeout(_timeout));
+        } else if (operation == 'clipboard-read') {
           result = utf8.encode(await readClipboard().timeout(_timeout));
           if (result.isEmpty || result.length > clipboardMaxBytes) {
             response.statusCode = HttpStatus.unprocessableEntity;
@@ -136,7 +154,7 @@ class HostToolsServer {
         }
       }
       final sealed = await _seal(code, 'response', binding, result);
-      if (!active || !clipboardEnabled) {
+      if (!_allows(operation)) {
         response.statusCode = HttpStatus.forbidden;
         return;
       }
@@ -168,6 +186,9 @@ class HostToolsClient {
 
   Future<String> readClipboard() async =>
       utf8.decode(await _exchange('clipboard-read', const []));
+
+  Future<String> diagnostics() async =>
+      utf8.decode(await _exchange('diagnostics', const []));
 
   Future<void> writeClipboard(String text) async {
     final bytes = utf8.encode(text);

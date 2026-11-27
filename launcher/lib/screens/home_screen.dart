@@ -813,6 +813,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                         builder: (_) =>
                                             FileTransferDialog(device: device),
                                       ),
+                                      onDiagnostics: () => showDialog<void>(
+                                          context: context,
+                                          barrierDismissible: false,
+                                          builder: (_) => ClipboardShareDialog(
+                                              device: device,
+                                              diagnostics: true)),
                                       onClipboard: () => showDialog<void>(
                                         context: context,
                                         barrierDismissible: false,

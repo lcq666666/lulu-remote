@@ -8,7 +8,8 @@ import '../services/secure_store.dart';
 import 'lulu_ui.dart';
 
 class ClipboardSettings extends StatefulWidget {
-  const ClipboardSettings({super.key});
+  const ClipboardSettings({super.key, this.diagnostics = false});
+  final bool diagnostics;
 
   @override
   State<ClipboardSettings> createState() => _ClipboardSettingsState();
@@ -23,7 +24,9 @@ class _ClipboardSettingsState extends State<ClipboardSettings> {
   void initState() {
     super.initState();
     _run(() async {
-      final enabled = await _host.clipboardEnabled();
+      final enabled = widget.diagnostics
+          ? await _host.diagnosticsEnabled()
+          : await _host.clipboardEnabled();
       if (mounted) setState(() => _enabled = enabled);
     });
   }
@@ -52,13 +55,19 @@ class _ClipboardSettingsState extends State<ClipboardSettings> {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('共享文本剪贴板'),
-            subtitle: const Text('开启后，持协作码的控制端可手动读取或替换本机剪贴板文本。'),
+            title: Text(widget.diagnostics ? '允许远程连接诊断' : '共享文本剪贴板'),
+            subtitle: Text(widget.diagnostics
+                ? '持协作码的控制端可查询电脑名称和远程服务状态。'
+                : '开启后，持协作码的控制端可手动读取或替换本机剪贴板文本。'),
             value: _enabled ?? false,
             onChanged: _busy || _enabled == null
                 ? null
                 : (value) => _run(() async {
-                      await _host.setClipboardEnabled(value);
+                      if (widget.diagnostics) {
+                        await _host.setDiagnosticsEnabled(value);
+                      } else {
+                        await _host.setClipboardEnabled(value);
+                      }
                       if (mounted) setState(() => _enabled = value);
                     }),
           ),
@@ -77,7 +86,9 @@ class _ClipboardSettingsState extends State<ClipboardSettings> {
 }
 
 class ClipboardShareDialog extends StatefulWidget {
-  const ClipboardShareDialog({super.key, required this.device});
+  const ClipboardShareDialog(
+      {super.key, required this.device, this.diagnostics = false});
+  final bool diagnostics;
   final Device device;
 
   @override
@@ -122,7 +133,10 @@ class _ClipboardShareDialogState extends State<ClipboardShareDialog> {
     });
     try {
       final client = HostToolsClient(address, code);
-      if (send) {
+      String? result;
+      if (widget.diagnostics) {
+        result = await client.diagnostics();
+      } else if (send) {
         await client.writeClipboard(
             (await Clipboard.getData(Clipboard.kTextPlain))?.text ?? '');
       } else {
@@ -136,7 +150,8 @@ class _ClipboardShareDialogState extends State<ClipboardShareDialog> {
         // The transfer succeeded even if the code could not be saved.
       }
       if (mounted) {
-        setState(() => _message = send ? '文本已送到被控端剪贴板。' : '文本已复制到本机剪贴板。');
+        setState(() =>
+            _message = result ?? (send ? '文本已送到被控端剪贴板。' : '文本已复制到本机剪贴板。'));
       }
     } on HostToolsException catch (error) {
       if (mounted) setState(() => _message = error.message);
@@ -156,12 +171,15 @@ class _ClipboardShareDialogState extends State<ClipboardShareDialog> {
   @override
   Widget build(BuildContext context) => AlertDialog(
         scrollable: true,
-        title: Text('文本剪贴板 · ${widget.device.displayName}'),
+        title: Text(
+            '${widget.diagnostics ? '连接诊断' : '文本剪贴板'} · ${widget.device.displayName}'),
         content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('先在被控端打开「共享文本剪贴板」。发送或接收会替换目标设备的剪贴板文本。'),
+              Text(widget.diagnostics
+                  ? '先在被控端打开「允许远程连接诊断」。'
+                  : '先在被控端打开「共享文本剪贴板」。发送或接收会替换目标设备的剪贴板文本。'),
               const SizedBox(height: 12),
               TextField(
                   controller: _code,
@@ -180,13 +198,16 @@ class _ClipboardShareDialogState extends State<ClipboardShareDialog> {
           TextButton(
               onPressed: _busy ? null : () => Navigator.pop(context),
               child: const Text('关闭')),
-          OutlinedButton(
-              onPressed:
-                  _busy || _loading ? null : () => _exchange(send: false),
-              child: const Text('接收文本')),
+          if (!widget.diagnostics)
+            OutlinedButton(
+                onPressed:
+                    _busy || _loading ? null : () => _exchange(send: false),
+                child: const Text('接收文本')),
           FilledButton(
-              onPressed: _busy || _loading ? null : () => _exchange(send: true),
-              child: const Text('发送本机文本')),
+              onPressed: _busy || _loading
+                  ? null
+                  : () => _exchange(send: !widget.diagnostics),
+              child: Text(widget.diagnostics ? '查询' : '发送本机文本')),
         ],
       );
 }

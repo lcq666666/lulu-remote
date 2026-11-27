@@ -15,6 +15,7 @@ void main() {
     final code = newTransferCode();
     server = HostToolsServer(
         code: code,
+        readDiagnostics: () async => '电脑名称：TEST-PC',
         readClipboard: () async => clipboard,
         writeClipboard: (value) async {
           clipboard = value;
@@ -54,5 +55,22 @@ void main() {
     await expectLater(client.writeClipboard('汉' * (clipboardMaxBytes ~/ 3 + 1)),
         throwsA(isA<HostToolsException>()));
     expect(clipboard, '来自主机');
+  });
+
+  test('fixed diagnostics only return a result when enabled', () async {
+    server.clipboardEnabled = true;
+    await expectLater(client.diagnostics(), throwsA(isA<HostToolsException>()));
+    server.diagnosticsEnabled = true;
+    expect(await client.diagnostics(), '电脑名称：TEST-PC');
+    final raw = HttpClient();
+    try {
+      final request = await raw.post(
+          '127.0.0.1', listener.port, '/v1/host-tools/arbitrary');
+      final response = await request.close();
+      expect(response.statusCode, HttpStatus.forbidden);
+      await response.drain<void>();
+    } finally {
+      raw.close(force: true);
+    }
   });
 }

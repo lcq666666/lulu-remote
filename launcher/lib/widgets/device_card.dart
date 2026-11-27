@@ -9,6 +9,7 @@ import 'lulu_ui.dart';
 enum _DeviceAction {
   transfer,
   clipboard,
+  diagnostics,
   edit,
   delete,
   help,
@@ -30,6 +31,7 @@ class DeviceCard extends StatefulWidget {
       this.busy = false,
       this.onTransfer,
       this.onClipboard,
+      this.onDiagnostics,
       this.onWake,
       this.waking = false,
       this.onPower,
@@ -48,6 +50,7 @@ class DeviceCard extends StatefulWidget {
   final VoidCallback onConnect;
   final VoidCallback? onTransfer;
   final VoidCallback? onClipboard;
+  final VoidCallback? onDiagnostics;
   final VoidCallback? onWake;
   final bool waking;
   final ValueChanged<PowerAction>? onPower;
@@ -76,6 +79,8 @@ class _DeviceCardState extends State<DeviceCard> {
         widget.onPower?.call(PowerAction.signOut);
       case _DeviceAction.transfer:
         widget.onTransfer?.call();
+      case _DeviceAction.diagnostics:
+        widget.onDiagnostics?.call();
       case _DeviceAction.clipboard:
         widget.onClipboard?.call();
       case _DeviceAction.edit:
@@ -123,6 +128,13 @@ class _DeviceCardState extends State<DeviceCard> {
                         title: const Text('发送文件'),
                         onTap: () =>
                             Navigator.pop(context, _DeviceAction.transfer),
+                      ),
+                    if (widget.onDiagnostics != null)
+                      ListTile(
+                        leading: const Icon(Icons.monitor_heart_outlined),
+                        title: const Text('连接诊断'),
+                        onTap: () =>
+                            Navigator.pop(context, _DeviceAction.diagnostics),
                       ),
                     if (widget.onClipboard != null)
                       ListTile(
@@ -226,6 +238,7 @@ class _DeviceCardState extends State<DeviceCard> {
     final actions = widget.onPower != null ||
         widget.onTransfer != null ||
         widget.onClipboard != null ||
+        widget.onDiagnostics != null ||
         widget.onEdit != null ||
         widget.onDelete != null ||
         widget.onAndroidHelp != null;
@@ -268,6 +281,9 @@ class _DeviceCardState extends State<DeviceCard> {
                   if (widget.onTransfer != null)
                     const PopupMenuItem(
                         value: _DeviceAction.transfer, child: Text('发送文件')),
+                  if (widget.onDiagnostics != null)
+                    const PopupMenuItem(
+                        value: _DeviceAction.diagnostics, child: Text('连接诊断')),
                   if (widget.onClipboard != null)
                     const PopupMenuItem(
                         value: _DeviceAction.clipboard, child: Text('文本剪贴板')),

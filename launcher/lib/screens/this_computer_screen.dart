@@ -347,6 +347,7 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
           const PowerSettings(),
           const Divider(),
           const ClipboardSettings(),
+          const ClipboardSettings(diagnostics: true),
           const Divider(),
           ListTile(
             leading: const Icon(Icons.history),
