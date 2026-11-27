@@ -170,12 +170,12 @@ std::optional<PrivacyPreview> PrivacyScreen::Show(HWND owner, bool use_image,
   request_id_ = request_id;
   Layout();
   ShowWindow(window_, SW_SHOWNOACTIVATE);
-  return PrivacyPreview{fallback, hotkey_registered_};
+  return PrivacyPreview{fallback, live || hotkey_registered_};
 }
 
 bool PrivacyScreen::PrepareLive(HINSTANCE instance) {
   DWORD affinity = WDA_NONE;
-  if (input_owner_ || !hotkey_registered_ ||
+  if (input_owner_ ||
       !SetLayeredWindowAttributes(window_, 0, 255, LWA_ALPHA) ||
       !SetWindowDisplayAffinity(window_, WDA_EXCLUDEFROMCAPTURE) ||
       !GetWindowDisplayAffinity(window_, &affinity) ||
@@ -184,6 +184,7 @@ bool PrivacyScreen::PrepareLive(HINSTANCE instance) {
   }
   // Capture sees the desktop below the click-through curtain. Physical
   // input is suppressed while Windows permits injected remote input through.
+  // The keyboard hook can dismiss the curtain even if the global hotkey is busy.
   for (int key : {VK_LCONTROL, VK_RCONTROL, VK_LMENU, VK_RMENU}) {
     physical_keys_[key] = (GetAsyncKeyState(key) & 0x8000) != 0;
   }
