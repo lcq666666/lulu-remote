@@ -11,6 +11,7 @@ import '../services/host_tray.dart';
 import '../services/mesh_status_service.dart';
 import '../widgets/auto_lock_tile.dart';
 import '../widgets/lulu_ui.dart';
+import '../widgets/file_transfer_settings.dart';
 import '../widgets/privacy_screen_settings.dart';
 import 'setup_checklist_screen.dart';
 
@@ -337,6 +338,8 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
           ],
           const Divider(),
           const PrivacyScreenSettings(),
+          const Divider(),
+          const FileTransferSettings(),
           const Divider(),
           const AutoLockTile(),
           const Divider(),

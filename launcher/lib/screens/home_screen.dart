@@ -14,6 +14,7 @@ import '../services/mesh_status_service.dart';
 import '../services/moonlight_launcher.dart';
 import '../services/secure_store.dart';
 import '../widgets/device_card.dart';
+import '../widgets/file_transfer_dialog.dart';
 import '../widgets/lulu_ui.dart';
 import 'add_device_screen.dart';
 import 'pairing_screen.dart';
@@ -707,6 +708,12 @@ class _HomeScreenState extends State<HomeScreen> {
                               mobile: !windows,
                               busy: _busy,
                               onConnect: () => _connect(device),
+                              onTransfer: () => showDialog<void>(
+                                context: context,
+                                barrierDismissible: false,
+                                builder: (_) =>
+                                    FileTransferDialog(device: device),
+                              ),
                               onEdit: () => _openAddDevice(device),
                               onDelete: () => _deleteDevice(device),
                               onDisconnect: windows && device.paired

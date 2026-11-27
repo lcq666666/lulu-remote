@@ -1,0 +1,127 @@
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:crypto/crypto.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:lulu_remote/services/file_transfer_host.dart';
+import 'package:lulu_remote/services/file_transfer_service.dart';
+
+void main() {
+  late Directory root;
+  late FileTransferServer receiver;
+  late Uri endpoint;
+  late String code;
+  late FileTransferClient sender;
+
+  setUp(() async {
+    root = await Directory.systemTemp.createTemp('qg-file-test-');
+    addTearDown(() => root.delete(recursive: true));
+    code = newTransferCode();
+    receiver = FileTransferServer(code: code, receiveDirectory: root);
+    final listener = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => listener.close(force: true));
+    listener.listen(receiver.handle);
+    endpoint = Uri(scheme: 'http', host: '127.0.0.1', port: listener.port);
+    sender = FileTransferClient(bytesPerSecond: 0);
+  });
+
+  Future<String> sendBytes(String name, List<int> bytes, {String? withCode}) =>
+      sender.send(
+        endpoint: endpoint,
+        code: withCode ?? code,
+        name: name,
+        length: bytes.length,
+        openRead: () => Stream.value(bytes),
+        onProgress: (_, __) {},
+      );
+
+  File received(String name) =>
+      File('${root.path}${Platform.pathSeparator}$name');
+
+  test('sends Unicode file names and preserves existing files', () async {
+    const name = '实验结果.txt';
+    final bytes = utf8.encode('组网文件传输');
+    expect(await sendBytes(name, bytes), name);
+    expect(await received(name).readAsBytes(), bytes);
+    final nextName = await sendBytes(name, [1, 2, 3]);
+    expect(nextName, isNot(name));
+    expect(await received(nextName).readAsBytes(), [1, 2, 3]);
+    expect(await received(name).readAsBytes(), bytes);
+  });
+
+  test('streams 100 MB and verifies the full file', () async {
+    const size = 100 * 1000 * 1000;
+    const name = 'sample.bin';
+    final block =
+        Uint8List.fromList(List.generate(64000, (index) => index % 251));
+    Stream<List<int>> data() async* {
+      for (var sent = 0; sent < size; sent += block.length) {
+        final remaining = size - sent;
+        yield remaining >= block.length
+            ? block
+            : Uint8List.sublistView(block, 0, remaining);
+      }
+    }
+
+    var reported = 0;
+    final saved = await sender.send(
+      endpoint: endpoint,
+      code: code,
+      name: name,
+      length: size,
+      openRead: data,
+      onProgress: (sent, _) => reported = sent,
+    );
+    expect(saved, name);
+    expect(reported, size);
+    expect(await received(name).length(), size);
+    expect(await sha256.bind(received(name).openRead()).first,
+        await sha256.bind(data()).first);
+  }, timeout: const Timeout(Duration(minutes: 2)));
+
+  test('rejects a wrong code or a disabled receiver', () async {
+    await expectLater(
+        sendBytes('denied.txt', [1], withCode: newTransferCode()),
+        throwsA(isA<FileTransferFailure>().having(
+            (failure) => failure.message, 'message', contains('接收码不正确'))));
+    receiver.enabled = false;
+    await expectLater(
+        sendBytes('denied.txt', [1]),
+        throwsA(isA<FileTransferFailure>()
+            .having((failure) => failure.message, 'message', contains('已关闭'))));
+    expect(await root.list().isEmpty, isTrue);
+  });
+
+  test('rejects and cleans up a changed file', () async {
+    var readCount = 0;
+    await expectLater(
+        sender.send(
+          endpoint: endpoint,
+          code: code,
+          name: 'changed.bin',
+          length: 1,
+          openRead: () => Stream.value([readCount++]),
+          onProgress: (_, __) {},
+        ),
+        throwsA(isA<FileTransferFailure>().having(
+            (failure) => failure.message, 'message', contains('文件校验失败'))));
+    expect(await root.list().isEmpty, isTrue);
+  });
+
+  test('accepts private overlay addresses and rejects unsafe paths', () {
+    expect(isPrivateTransferAddress('100.110.0.1'), isTrue);
+    expect(isPrivateTransferAddress('1.1.1.1'), isFalse);
+    expect(isPrivateTransferAddress('127.0.0.1'), isFalse);
+    for (final name in [
+      '../escape',
+      r'foo\escape',
+      'report:stream',
+      'NUL.txt',
+      'file.',
+      'name '
+    ]) {
+      expect(safeTransferName(name), isFalse, reason: name);
+    }
+  });
+}

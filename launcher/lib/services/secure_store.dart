@@ -24,17 +24,20 @@ class SecureStore {
       _storage.delete(key: _key('activation_token'));
 
   // --- LULU client identity (one identity for this launcher install) ---
-  Future<String?> readClientCertPem() => _storage.read(key: _key('client_cert_pem'));
+  Future<String?> readClientCertPem() =>
+      _storage.read(key: _key('client_cert_pem'));
   Future<void> writeClientCertPem(String pem) =>
       _storage.write(key: _key('client_cert_pem'), value: pem);
-  Future<String?> readClientKeyPem() => _storage.read(key: _key('client_key_pem'));
+  Future<String?> readClientKeyPem() =>
+      _storage.read(key: _key('client_key_pem'));
   Future<void> writeClientKeyPem(String pem) =>
       _storage.write(key: _key('client_key_pem'), value: pem);
   // RSA private-key components as JSON (n/e/d/p/q, hex) — used by the
   // pairing module for signing. The PKCS#8 PEM above is the same key in
   // the form dart:io SecurityContext needs for mutual TLS. Both live
   // only in secure storage; they are two encodings of one key.
-  Future<String?> readClientKeyJson() => _storage.read(key: _key('client_key_json'));
+  Future<String?> readClientKeyJson() =>
+      _storage.read(key: _key('client_key_json'));
   Future<void> writeClientKeyJson(String json) =>
       _storage.write(key: _key('client_key_json'), value: json);
   Future<String?> readUniqueId() => _storage.read(key: _key('uniqueid'));
@@ -57,8 +60,22 @@ class SecureStore {
   Future<void> writeSunshinePassword(String deviceId, String password) =>
       _storage.write(key: _key('sunshine_password', deviceId), value: password);
 
+  Future<String?> readHostTransferCode() =>
+      _storage.read(key: _key('host_transfer_code'));
+  Future<void> writeHostTransferCode(String value) =>
+      _storage.write(key: _key('host_transfer_code'), value: value);
+  Future<String?> readTransferCode(String deviceId) =>
+      _storage.read(key: _key('transfer_code', deviceId));
+  Future<void> writeTransferCode(String deviceId, String value) =>
+      _storage.write(key: _key('transfer_code', deviceId), value: value);
+
   Future<void> deleteDeviceSecrets(String deviceId) async {
-    for (final name in ['server_cert_hex', 'sunshine_user', 'sunshine_password']) {
+    for (final name in [
+      'server_cert_hex',
+      'sunshine_user',
+      'sunshine_password',
+      'transfer_code'
+    ]) {
       await _storage.delete(key: _key(name, deviceId));
     }
   }

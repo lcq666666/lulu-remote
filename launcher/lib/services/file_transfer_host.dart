@@ -1,0 +1,189 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'file_transfer_service.dart';
+import 'mesh_status_service.dart';
+import 'secure_store.dart';
+
+bool isPrivateTransferAddress(String address) {
+  final ip = InternetAddress.tryParse(address);
+  if (ip == null || ip.type != InternetAddressType.IPv4) return false;
+  final bytes = ip.rawAddress;
+  return bytes[0] == 10 ||
+      bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31 ||
+      bytes[0] == 192 && bytes[1] == 168 ||
+      bytes[0] == 100 && bytes[1] >= 64 && bytes[1] <= 127;
+}
+
+class FileTransferHost {
+  FileTransferHost._();
+
+  static final instance = FileTransferHost._();
+  static const _enabledKey = 'qg_file_transfer_enabled';
+  static const _folderKey = 'qg_file_transfer_folder';
+  static const _channel = MethodChannel('lulu/host_tray');
+  final _secureStore = SecureStore();
+  final _listeners = <String, HttpServer>{};
+  FileTransferServer? _handler;
+  Future<String>? _readingCode;
+  int _settingsGeneration = 0;
+  Timer? _timer;
+  Future<void> _updates = Future<void>.value();
+
+  Future<bool> isEnabled() async =>
+      (await SharedPreferences.getInstance()).getBool(_enabledKey) ?? false;
+
+  Future<String> directoryPath() async {
+    final prefs = await SharedPreferences.getInstance();
+    final selected = prefs.getString(_folderKey);
+    if (selected != null) return selected;
+    final desktop = await _channel.invokeMethod<String>('knownDesktop');
+    if (desktop == null || desktop.isEmpty) {
+      throw StateError('无法找到桌面。请选择接收文件夹。');
+    }
+    return '$desktop${Platform.pathSeparator}LULU 接收';
+  }
+
+  Future<String> code() =>
+      _readingCode ??= _loadCode().whenComplete(() => _readingCode = null);
+
+  Future<String> _loadCode() async {
+    final code = await _secureStore.readHostTransferCode();
+    if (code != null && validTransferCode(code)) return code;
+    return _rotateCode();
+  }
+
+  Future<String> _rotateCode() async {
+    final value = newTransferCode();
+    await _secureStore.writeHostTransferCode(value);
+    return value;
+  }
+
+  Future<String> rotateCode() async {
+    if (_readingCode case final active?) await active;
+    _settingsGeneration++;
+    await _disableCurrent();
+    final value = await _rotateCode();
+    await refresh();
+    return value;
+  }
+
+  Future<void> setEnabled(bool enabled) async {
+    _settingsGeneration++;
+    if (!enabled) await _disableCurrent();
+    final prefs = await SharedPreferences.getInstance();
+    if (!await prefs.setBool(_enabledKey, enabled)) {
+      await prefs.reload();
+      throw StateError('无法保存文件接收设置。');
+    }
+    await refresh();
+  }
+
+  Future<void> setFolder(String path) async {
+    _settingsGeneration++;
+    final folder = Directory(path);
+    if (!await folder.exists()) throw StateError('请选择可用的文件夹。');
+    final prefs = await SharedPreferences.getInstance();
+    if (!await prefs.setString(_folderKey, path)) {
+      await prefs.reload();
+      throw StateError('无法保存接收目录。');
+    }
+    await refresh();
+  }
+
+  void start() {
+    if (_timer != null) return;
+    _timer = Timer.periodic(
+        const Duration(seconds: 15), (_) => unawaited(refresh()));
+    unawaited(refresh());
+  }
+
+  Future<void> stop() async {
+    _settingsGeneration++;
+    _timer?.cancel();
+    _timer = null;
+    await _disableCurrent();
+    await refresh();
+  }
+
+  Future<void> refresh() => _updates = _updates.then((_) => _refresh());
+
+  Future<void> _disableCurrent() async {
+    _handler?.enabled = false;
+    _handler = null;
+    final listeners = _listeners.values.toList();
+    _listeners.clear();
+    for (final listener in listeners) {
+      await listener.close(force: true);
+    }
+  }
+
+  Future<void> _refresh() async {
+    final generation = _settingsGeneration;
+    try {
+      if (_timer == null || !await isEnabled()) {
+        await _disableCurrent();
+        return;
+      }
+      final path = await directoryPath();
+      final secret = await code();
+      final addresses = (await MeshStatusService().localAddresses())
+          .where((entry) =>
+              entry.network != null && isPrivateTransferAddress(entry.address))
+          .map((entry) => entry.address)
+          .toSet();
+      if (_timer == null ||
+          !await isEnabled() ||
+          generation != _settingsGeneration) return;
+      final previous = _handler;
+      if (previous == null ||
+          previous.code != secret ||
+          previous.receiveDirectory.path != path) {
+        await _disableCurrent();
+        _handler =
+            FileTransferServer(code: secret, receiveDirectory: Directory(path));
+      }
+      final expired = _listeners.keys
+          .where((address) => !addresses.contains(address))
+          .toList();
+      for (final address in expired) {
+        await _listeners.remove(address)?.close(force: true);
+      }
+      for (final address in addresses.difference(_listeners.keys.toSet())) {
+        try {
+          final listener = await HttpServer.bind(address, fileTransferPort);
+          if (_timer == null ||
+              _handler == null ||
+              !await isEnabled() ||
+              generation != _settingsGeneration) {
+            await listener.close(force: true);
+            continue;
+          }
+          listener.idleTimeout = const Duration(seconds: 20);
+          _listeners[address] = listener;
+          listener.listen(_dispatch, onError: (Object _) {});
+        } on SocketException {
+          // The mesh adapter may still be starting. Retry on the next refresh.
+        }
+      }
+    } on Exception {
+      await _disableCurrent();
+    } on StateError {
+      await _disableCurrent();
+    }
+  }
+
+  void _dispatch(HttpRequest request) {
+    final handler = _handler;
+    final remote = request.connectionInfo?.remoteAddress.address;
+    if (handler != null && remote != null && isPrivateTransferAddress(remote)) {
+      unawaited(handler.handle(request));
+    } else {
+      request.response.statusCode = HttpStatus.forbidden;
+      unawaited(request.response.close());
+    }
+  }
+}
