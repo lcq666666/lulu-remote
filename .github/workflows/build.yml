@@ -190,8 +190,8 @@ jobs:
           certificate() {
             local verified
             verified="$("$apksigner" verify --print-certs "$1")" || return 1
-            printf '%s\n' "$verified" >&2
-            sed -En 's/^Signer.* certificate SHA-256 digest: *([[:xdigit:]:]+)[[:space:]]*$/\1/ip' <<< "$verified" | tr -d ':'
+            # apksigner may label the APK signer by number or signing scheme.
+            sed -En 's/^(V[0-9.]+ )?Signer[^:]*:? certificate SHA-256 digest: *([[:xdigit:]:]+)[[:space:]]*$/\2/ip' <<< "$verified" | tr -d ':' | sort -u
           }
           launcher_cert="$(certificate android-dist/LULU-Remote-*.apk)"
           worker_cert="$(certificate android-dist/LULU-Pairing-Worker-*.apk)"
