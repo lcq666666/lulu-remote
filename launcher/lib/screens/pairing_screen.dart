@@ -14,6 +14,7 @@ import '../services/component_installer.dart';
 import '../services/mesh_status_service.dart';
 import '../services/moonlight_launcher.dart';
 import '../services/secure_store.dart';
+import '../widgets/lulu_ui.dart';
 import '../widgets/pin_display.dart';
 
 /// In-app pairing screen. The whole point: the user never opens Moonlight.
@@ -24,8 +25,9 @@ import '../widgets/pin_display.dart';
 /// 3. Wait for phases 2–5. On success the device comes back paired with
 ///    its AppId + host UUID resolved, and the home screen can connect.
 class PairingScreen extends StatefulWidget {
-  const PairingScreen({super.key, required this.device});
+  const PairingScreen({super.key, required this.device, this.dialog = false});
   final Device device;
+  final bool dialog;
 
   @override
   State<PairingScreen> createState() => _PairingScreenState();
@@ -272,102 +274,116 @@ class _PairingScreenState extends State<PairingScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('首次连接 · ${widget.device.name}')),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 580),
-          child: ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              const Text(
-                '请在对方的同意下，使用那台电脑的远程管理账号完成首次授权。',
-                style: TextStyle(color: LuluTheme.muted),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _userController,
-                enabled: !_running,
-                decoration: const InputDecoration(
-                  labelText: '对方电脑的管理账号',
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _passwordController,
-                enabled: !_running,
-                obscureText: true,
-                decoration: const InputDecoration(
-                  labelText: '对方电脑的管理密码',
-                ),
-              ),
-              const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: _running ? null : _start,
-                child: Text(_running ? '正在验证…' : '确认授权'),
-              ),
-              if (_running && _pin != null) ...[
-                const SizedBox(height: 16),
-                PinDisplay(
-                  pin: _pin!,
-                  subtitle: 'LULU 会自动提交。需要手动确认时，请在对方电脑输入上方的 4 位 PIN。',
-                ),
-                Text(
-                    '正在等待对方确认。请在对方电脑上打开 Sunshine 配对页（${widget.device.webBase} → 点 PIN），输入上方显示的 4 位 PIN；如果对方电脑装了 LULU 伴侣，会直接弹出输入框。'),
-                Text('已等待 ${_waiting.elapsed.inSeconds} 秒'),
-                Wrap(spacing: 8, children: [
-                  TextButton(
-                    onPressed: () async {
-                      final pin = _pin;
-                      if (pin == null) return;
-                      await Clipboard.setData(ClipboardData(text: pin));
-                      if (mounted && _pin == pin) {
-                        setState(() => _pinStatus = '已复制 PIN。');
-                      }
-                    },
-                    child: const Text('复制 PIN'),
-                  ),
-                  TextButton(
-                      onPressed: _openPairingPage,
-                      child: const Text('打开对方配对页')),
-                  TextButton(
-                      onPressed: _checkingRequest ? null : _checkPendingRequest,
-                      child: const Text('我已在对方电脑输入')),
-                ]),
-                if (_pinStatus != null) Text(_pinStatus!),
-              ],
-              const SizedBox(height: 20),
-              Text('连接进度', style: Theme.of(context).textTheme.titleMedium),
-              Text('目标：${widget.device.meshAddress}',
-                  style: const TextStyle(color: LuluTheme.muted)),
-              if (_phase != PairingPhase.done &&
-                  (_phase != null || _error != null))
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
+    final theme = LuluTheme.of(context);
+    final device = widget.device;
+    final pin = _running ? _pin : null;
+    return LuluFormFrame(
+      title: '首次连接配对',
+      icon: Icons.verified_user_outlined,
+      dialog: widget.dialog,
+      width: 420,
+      subtitle: Text(
+          '${device.name} · ${device.meshAddress}:${device.sunshinePort}',
+          style: LuluTheme.mono.copyWith(fontSize: 12, color: theme.muted)),
+      children: [
+        if (pin == null) ...[
+          Text('请在对方同意后，使用那台电脑的远程管理账号完成首次授权。',
+              style: TextStyle(color: theme.muted, fontSize: 13)),
+          const SizedBox(height: 16),
+          TextField(
+              controller: _userController,
+              enabled: !_running,
+              decoration: const InputDecoration(labelText: '对方电脑的管理账号')),
+          const SizedBox(height: 12),
+          TextField(
+              controller: _passwordController,
+              enabled: !_running,
+              obscureText: true,
+              decoration: const InputDecoration(labelText: '对方电脑的管理密码')),
+          const SizedBox(height: 16),
+          FilledButton(
+              onPressed: _running ? null : _start,
+              child: Text(_running ? '正在验证…' : '确认授权')),
+        ] else ...[
+          PinDisplay(
+            pin: pin,
+            subtitle: 'LULU 会自动提交。需要手动确认时，请在对方电脑的配对弹窗或 Sunshine 的 PIN 页面输入此码。',
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+              alignment: WrapAlignment.center,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                SizedBox.square(
+                    dimension: 14,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: theme.accent)),
+                Text('等待主机确认配对…',
+                    style: TextStyle(color: theme.muted, fontSize: 12)),
+                Text('${_waiting.elapsed.inSeconds} 秒',
+                    style: LuluTheme.mono
+                        .copyWith(color: theme.muted, fontSize: 12)),
+              ]),
+          const SizedBox(height: 8),
+          Wrap(alignment: WrapAlignment.center, spacing: 6, children: [
+            TextButton(
+                onPressed: () async {
+                  await Clipboard.setData(ClipboardData(text: pin));
+                  if (mounted && _pin == pin) {
+                    setState(() => _pinStatus = '已复制 PIN。');
+                  }
+                },
+                child: const Text('复制 PIN')),
+            TextButton(
+                onPressed: _openPairingPage, child: const Text('打开对方配对页')),
+            TextButton(
+                onPressed: _checkingRequest ? null : _checkPendingRequest,
+                child: const Text('我已在对方电脑输入')),
+          ]),
+          if (_pinStatus != null)
+            Text(_pinStatus!,
+                textAlign: TextAlign.center,
+                style: TextStyle(color: theme.muted, fontSize: 13)),
+        ],
+        const SizedBox(height: 16),
+        const Divider(),
+        if (_running) const LinearProgressIndicator(minHeight: 2),
+        if (_error != null || (_phase != null && _phase != PairingPhase.done))
+          Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Semantics(
+                  liveRegion: true,
                   child: Text(
                     _error == null
-                        ? '${_steps[_phase]}：${_message ?? ''}'
+                        ? '${_steps[_phase] ?? '正在配对'}：${_message ?? ''}'
                         : _phase == null
                             ? _error!
                             : '${_steps[_phase]}失败：$_error',
                     style: TextStyle(
-                      color: _error == null
-                          ? LuluTheme.text
-                          : LuluTheme.warningText,
-                    ),
-                  ),
-                ),
-              const SizedBox(height: 4),
-              for (final (index, step) in _steps.entries.indexed)
-                _buildStep(index, step),
-            ],
-          ),
+                        fontSize: 13,
+                        color: _error == null ? theme.muted : theme.warning),
+                  ))),
+        ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          title: const Text('连接进度',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+          children: [
+            for (final step in _steps.entries) _buildStep(step, theme)
+          ],
         ),
-      ),
+        if (widget.dialog)
+          Align(
+              alignment: Alignment.centerRight,
+              child: OutlinedButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('取消'))),
+      ],
     );
   }
 
-  Widget _buildStep(int index, MapEntry<PairingPhase, String> step) {
+  Widget _buildStep(MapEntry<PairingPhase, String> step, LuluTheme theme) {
     final phase = _phase;
     final passed = phase != null && phase.index > step.key.index;
     final current = phase == step.key;
@@ -376,37 +392,33 @@ class _PairingScreenState extends State<PairingScreen> {
         ? '失败'
         : passed
             ? '通过'
-            : current
+            : current && _running
                 ? '检查中'
                 : '待检查';
+    final color = failed
+        ? theme.warning
+        : passed
+            ? theme.success
+            : current && _running
+                ? theme.accent
+                : theme.muted;
     return ListTile(
       dense: true,
       contentPadding: EdgeInsets.zero,
-      minLeadingWidth: 20,
+      minLeadingWidth: 18,
       leading: current && _running
           ? const SizedBox.square(
-              dimension: 18,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            )
+              dimension: 16, child: CircularProgressIndicator(strokeWidth: 2))
           : Icon(
               failed
                   ? Icons.error_outline
                   : passed
                       ? Icons.check_circle_outline
                       : Icons.radio_button_unchecked,
-              size: 20,
-              color: failed
-                  ? LuluTheme.warningText
-                  : passed
-                      ? LuluTheme.accent
-                      : LuluTheme.muted),
-      title: Text('${index + 1}. ${step.value}'),
-      subtitle: current
-          ? Text(failed ? _error! : _message ?? '',
-              style:
-                  failed ? const TextStyle(color: LuluTheme.warningText) : null)
-          : null,
-      trailing: Text(label),
+              size: 17,
+              color: color),
+      title: Text(step.value),
+      trailing: LuluBadge(label: label, color: color),
     );
   }
 }

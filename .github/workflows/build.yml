@@ -172,16 +172,16 @@ jobs:
             dist/android-apk/*.apk
             dist/windows-installers/vendor/MANIFEST.md
           body: |
-            ### 0.2.0 更新
+            ### 0.2.1 更新
 
-            - 首页每 5 秒自动更新电脑状态。启动时网络还没就绪，恢复后会自动更新；点击进入桌面时也会重试一次。
-            - 电脑状态检测直接访问对方的远程服务，避免被 HTTP 代理或重定向干扰。
-            - Windows 安装版和便携版启动连接组件时复用当前 Windows 用户已有的 Moonlight 配对记录。
+            - Windows 新增侧栏、双列设备卡片和常驻画质栏，并重新设计「让别人连接我」页面。
+            - Android 改为单列设备卡片和底部导航，设备菜单继续提供 Moonlight 连接排障。
+            - 两端新增深浅主题切换，统一添加电脑、四格 PIN、配对进度和连接诊断的样式。
 
             ### Windows
 
-            两台电脑都可下载 `LULU-Remote-Setup-0.2.0.exe` 覆盖安装。安装前可从托盘退出正在运行的 LULU。也可下载 `LULU-Remote-Portable-0.2.0-x64.zip`，解压整个文件夹后打开 `lulu_remote.exe`。
-            被控电脑在「让别人连接我」中开启远程控制并设置本机管理账号。需要专门部署被控电脑时，也可用 `LULU-Host-Setup-0.2.0.exe`，它会设置 Windows 登录后自动在托盘启动。
+            两台电脑都可下载 `LULU-Remote-Setup-0.2.1.exe` 覆盖安装。安装前可从托盘退出正在运行的 LULU。也可下载 `LULU-Remote-Portable-0.2.1-x64.zip`，解压整个文件夹后打开 `lulu_remote.exe`。
+            被控电脑在「让别人连接我」中开启远程控制并设置本机管理账号。需要专门部署被控电脑时，也可用 `LULU-Host-Setup-0.2.1.exe`，它会设置 Windows 登录后自动在托盘启动。
             控制电脑在「连接电脑」中填入被控电脑显示的地址，然后发起配对。
 
             ### Android

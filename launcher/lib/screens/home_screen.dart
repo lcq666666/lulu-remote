@@ -14,14 +14,22 @@ import '../services/mesh_status_service.dart';
 import '../services/moonlight_launcher.dart';
 import '../services/secure_store.dart';
 import '../widgets/device_card.dart';
+import '../widgets/lulu_ui.dart';
 import 'add_device_screen.dart';
 import 'pairing_screen.dart';
 import 'setup_checklist_screen.dart';
 import 'this_computer_screen.dart';
 
-/// Home: device list (2 hosts), quality presets, connect, mesh footer.
+enum _HomeTab { connect, host, settings }
+
+typedef _HostCheck = ({HostStatus status, Duration elapsed});
+
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  const HomeScreen(
+      {super.key, required this.themeMode, required this.onThemeChanged});
+
+  final ThemeMode themeMode;
+  final ValueChanged<ThemeMode> onThemeChanged;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -34,13 +42,15 @@ class _HomeScreenState extends State<HomeScreen> {
   final _secureStore = SecureStore();
 
   List<Device> _devices = [];
-  Map<String, HostStatus> _status = {};
+  Map<String, _HostCheck> _status = {};
   QualityPreset _preset = QualityPreset.office1080;
   String? _connectingId;
   bool _loading = true;
   bool _saving = false;
   Timer? _statusTimer;
   int _statusRefresh = 0;
+  _HomeTab _tab = _HomeTab.connect;
+  bool _manualRefresh = false;
 
   @override
   void initState() {
@@ -72,24 +82,30 @@ class _HomeScreenState extends State<HomeScreen> {
     final devices = _devices;
     final refresh = ++_statusRefresh;
     final entries = await Future.wait(devices.map((device) async {
-      return MapEntry(device.id, await _mesh.check(device));
+      return MapEntry(device.id, await _measureHostCheck(device));
     }));
     if (mounted && identical(devices, _devices) && refresh == _statusRefresh) {
       setState(() => _status = Map.fromEntries(entries));
     }
   }
 
+  Future<_HostCheck> _measureHostCheck(Device device) async {
+    final watch = Stopwatch()..start();
+    final status = await _mesh.check(device);
+    return (status: status, elapsed: watch.elapsed);
+  }
+
   Future<void> _checkConnection(Device device) async {
     ++_statusRefresh;
-    var status = await _mesh.check(device);
-    if (status != HostStatus.online && mounted) {
+    var check = await _measureHostCheck(device);
+    if (check.status != HostStatus.online && mounted) {
       await Future<void>.delayed(const Duration(seconds: 1));
       if (!mounted) return;
-      status = await _mesh.check(device);
+      check = await _measureHostCheck(device);
     }
     if (!mounted) return;
-    setState(() => _status[device.id] = status);
-    if (status != HostStatus.online) {
+    setState(() => _status[device.id] = check);
+    if (check.status != HostStatus.online) {
       throw MoonlightLaunchException(
         '暂时连不上「${device.name}」。请确认对方电脑已开机、远程控制已开启，并检查连接地址。',
       );
@@ -208,14 +224,16 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     if (!mounted) return;
     if (opened) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: const Text('已请求打开 Moonlight，请在 Moonlight 中确认是否开始串流。'),
-        duration: const Duration(seconds: 12),
-        action: SnackBarAction(
-          label: '连接失败帮助',
-          onPressed: () => _showAndroidHelp(device),
-        ),
-      ));
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(
+          content: const Text('已请求打开 Moonlight，请在 Moonlight 中确认是否开始串流。'),
+          duration: const Duration(seconds: 12),
+          action: SnackBarAction(
+            label: '连接失败帮助',
+            onPressed: () => _showAndroidHelp(device),
+          ),
+        ));
     } else {
       unawaited(_showAndroidHelp(device));
     }
@@ -223,30 +241,52 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _showAndroidHelp(Device device) async {
     if (!mounted) return;
-    final action = await showDialog<String>(
+    final action = await showModalBottomSheet<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Moonlight 退出或连接失败'),
-        content: const Text('安卓端需要在 Moonlight 里先配对一次，再回 LULU 点连接。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('关闭'),
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (context) {
+        final theme = LuluTheme.of(context);
+        return SafeArea(
+          top: false,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text('Moonlight 退出或连接失败',
+                    style:
+                        TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 8),
+                Text('${device.meshAddress}:${device.sunshinePort}',
+                    style: LuluTheme.mono.copyWith(color: theme.muted)),
+                const SizedBox(height: 8),
+                Text(
+                    '确认对方电脑已开启远程服务，两台设备使用同一局域网或组网。安卓端需要先在 Moonlight 中与对方配对，再返回 LULU 重试。',
+                    style: TextStyle(color: theme.muted, fontSize: 13)),
+                const SizedBox(height: 16),
+                if (device.paired)
+                  FilledButton(
+                      onPressed: () => Navigator.pop(context, 'shortcut'),
+                      child: const Text('已在 Moonlight 配对，重试')),
+                OutlinedButton(
+                    onPressed: () => Navigator.pop(context, 'settings'),
+                    child: const Text('前往连接设置检测')),
+                TextButton(
+                    onPressed: () => Navigator.pop(context, 'store'),
+                    child: const Text('Moonlight 商店页')),
+              ],
+            ),
           ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, 'store'),
-            child: const Text('Moonlight 商店页'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, 'shortcut'),
-            child: const Text('已在 Moonlight 配对，重试'),
-          ),
-        ],
-      ),
+        );
+      },
     );
     if (!mounted) return;
     if (action == 'shortcut') {
       await _connect(device, androidShortcut: true);
+    } else if (action == 'settings') {
+      _selectTab(_HomeTab.settings);
     } else if (action == 'store') {
       await _openMoonlightStore();
     }
@@ -276,9 +316,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _openPairing(Device device) async {
     if (_saving || _connectingId != null) return;
-    final updated = await Navigator.of(context).push<Device>(
-      MaterialPageRoute(builder: (_) => PairingScreen(device: device)),
-    );
+    final updated = await _openDeviceForm(
+        (dialog) => PairingScreen(device: device, dialog: dialog));
     if (mounted && updated != null) {
       await _saveDeviceChange(() => _deviceStore.updateDevice(updated));
     }
@@ -286,9 +325,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _openAddDevice([Device? existing]) async {
     if (_saving || _connectingId != null) return;
-    final device = await Navigator.of(context).push<Device>(
-      MaterialPageRoute(builder: (_) => AddDeviceScreen(device: existing)),
-    );
+    final device = await _openDeviceForm(
+        (dialog) => AddDeviceScreen(device: existing, dialog: dialog));
     if (!mounted || device == null) return;
     await _saveDeviceChange(() async {
       if (existing == null) {
@@ -350,189 +388,424 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _snack(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
+    showLuluSnack(context, message);
+  }
+
+  Future<Device?> _openDeviceForm(Widget Function(bool dialog) builder) {
+    if (Platform.isWindows) {
+      return showDialog<Device>(
+        context: context,
+        barrierColor: Colors.black54,
+        barrierDismissible: false,
+        builder: (_) => builder(true),
+      );
+    }
+    return Navigator.of(context).push<Device>(
+      MaterialPageRoute(builder: (_) => builder(false)),
     );
   }
 
-  void _openThisComputer() {
-    Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => const ThisComputerScreen(),
-    ));
+  Future<void> _refreshFromToolbar() async {
+    setState(() => _manualRefresh = true);
+    try {
+      await _refreshStatus();
+    } finally {
+      if (mounted) setState(() => _manualRefresh = false);
+    }
   }
 
-  void _openSettings() {
-    Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => const SetupChecklistScreen(),
-    ));
-  }
+  bool get _busy => _loading || _saving || _connectingId != null;
+
+  void _selectTab(_HomeTab tab) => setState(() => _tab = tab);
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text(
-          'LULU 远程',
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: '连接设置',
-            onPressed: _openSettings,
+    return LayoutBuilder(builder: (context, constraints) {
+      final windows = Platform.isWindows;
+      final wide = windows && constraints.maxWidth >= 760;
+      final theme = LuluTheme.of(context);
+      final content = switch (_tab) {
+        _HomeTab.connect => _connectionPage(windows),
+        _HomeTab.host => const ThisComputerScreen(embedded: true),
+        _HomeTab.settings => SetupChecklistScreen(
+            embedded: true,
+            showTitle: wide,
+            preferences: _preferences(windows),
           ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: '刷新状态',
-            onPressed: _refreshStatus,
-          ),
-        ],
-      ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : LayoutBuilder(builder: (context, constraints) {
-              final wide = Platform.isWindows && constraints.maxWidth >= 760;
-              final content = ListView(
-                padding: const EdgeInsets.all(16),
-                children: [
-                  Row(
-                    children: [
-                      const Expanded(
-                          child: Text(
-                        '连接电脑',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                          color: LuluTheme.text,
-                        ),
-                      )),
-                      ElevatedButton.icon(
-                        onPressed: _saving ? null : _openAddDevice,
-                        icon: const Icon(Icons.add),
-                        label: const Text('添加电脑'),
-                      ),
-                    ],
-                  ),
-                  if (Platform.isWindows && !wide)
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton.icon(
-                        onPressed: _openThisComputer,
-                        icon: const Icon(Icons.desktop_windows_outlined),
-                        label: const Text('让别人连接我'),
-                      ),
-                    ),
-                  const SizedBox(height: 12),
-                  if (_devices.isEmpty)
-                    const ListTile(
-                      leading: Icon(Icons.desktop_windows_outlined),
-                      title: Text('还没有添加电脑'),
-                    ),
-                  for (final device in _devices) ...[
-                    DeviceCard(
-                      device: device,
-                      status: _status[device.id],
-                      connecting: _connectingId == device.id || _saving,
-                      onConnect: () => _connect(device),
-                      onEdit: _saving ? null : () => _openAddDevice(device),
-                      onDelete: _saving ? null : () => _deleteDevice(device),
-                      onDisconnect: Platform.isWindows && device.paired
-                          ? () => _disconnectWindows(device)
-                          : null,
-                      onAndroidHelp: Platform.isAndroid && device.paired
-                          ? () => _showAndroidHelp(device)
-                          : null,
-                    ),
-                    const SizedBox(height: 12),
+      };
+      return Scaffold(
+        appBar: wide
+            ? null
+            : AppBar(
+                title: Text(switch (_tab) {
+                  _HomeTab.connect => 'LULU 远程',
+                  _HomeTab.host => '让别人连接我',
+                  _HomeTab.settings => '连接设置',
+                }),
+                actions: _tab == _HomeTab.connect
+                    ? [
+                        _refreshButton(),
+                        IconButton(
+                            tooltip: '添加电脑',
+                            onPressed: _busy ? null : _openAddDevice,
+                            icon: const Icon(Icons.add, size: 23)),
+                        const SizedBox(width: 8),
+                      ]
+                    : null,
+              ),
+        bottomNavigationBar: wide
+            ? null
+            : DecoratedBox(
+                decoration: BoxDecoration(
+                    border: Border(top: BorderSide(color: theme.divider))),
+                child: NavigationBar(
+                  selectedIndex: windows
+                      ? _tab.index
+                      : (_tab == _HomeTab.settings ? 1 : 0),
+                  onDestinationSelected: (index) => _selectTab(windows
+                      ? _HomeTab.values[index]
+                      : [_HomeTab.connect, _HomeTab.settings][index]),
+                  destinations: [
+                    const NavigationDestination(
+                        icon: Icon(Icons.desktop_windows_outlined),
+                        label: '连接电脑'),
+                    if (windows)
+                      const NavigationDestination(
+                          icon: Icon(Icons.share_outlined), label: '让别人连接我'),
+                    const NavigationDestination(
+                        icon: Icon(Icons.settings_outlined), label: '连接设置'),
                   ],
-                  if (Platform.isWindows && _devices.isNotEmpty)
-                    ExpansionTile(
-                      tilePadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.tune),
-                      title: const Text('连接画质'),
-                      subtitle: Text(_preset.summary),
-                      children: [
-                        _PresetBar(
-                          selected: _preset,
-                          onSelected: (p) => setState(() => _preset = p),
-                        ),
-                      ],
-                    ),
-                ],
-              );
-              if (!wide) return content;
-              return Row(
-                children: [
-                  SizedBox(
-                    width: 225,
-                    child: ListView(
-                      padding: const EdgeInsets.all(12),
-                      children: [
-                        const ListTile(
-                          selected: true,
-                          leading: Icon(Icons.devices_outlined),
-                          title: Text('连接电脑'),
-                        ),
-                        ListTile(
-                          leading: const Icon(Icons.desktop_windows_outlined),
-                          title: const Text('让别人连接我'),
-                          onTap: _openThisComputer,
-                        ),
-                      ],
-                    ),
-                  ),
-                  const VerticalDivider(width: 1),
-                  Expanded(child: content),
-                ],
-              );
-            }),
+                ),
+              ),
+        body: wide
+            ? Row(children: [_sidebar(theme), Expanded(child: content)])
+            : content,
+      );
+    });
+  }
+
+  Widget _sidebar(LuluTheme theme) {
+    return Container(
+      width: 220,
+      decoration: BoxDecoration(
+          color: theme.sidebar,
+          border: Border(right: BorderSide(color: theme.divider))),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Expanded(
+            child: ListView(padding: const EdgeInsets.all(10), children: [
+          _navEntry(_HomeTab.connect, Icons.desktop_windows_outlined, '连接电脑'),
+          const SizedBox(height: 4),
+          _navEntry(_HomeTab.host, Icons.share_outlined, '让别人连接我'),
+        ])),
+        const Divider(),
+        Padding(
+          padding: const EdgeInsets.all(10),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            _navEntry(_HomeTab.settings, Icons.settings_outlined, '连接设置'),
+            const SizedBox(height: 8),
+            Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: _themeButtons()),
+          ]),
+        ),
+      ]),
     );
   }
-}
 
-class _PresetBar extends StatelessWidget {
-  const _PresetBar({required this.selected, required this.onSelected});
-  final QualityPreset selected;
-  final ValueChanged<QualityPreset> onSelected;
+  Widget _navEntry(_HomeTab tab, IconData icon, String label) {
+    final theme = LuluTheme.of(context);
+    final active = tab == _tab;
+    final color = active ? theme.text : theme.muted;
+    return Semantics(
+        selected: active,
+        button: true,
+        child: Material(
+          color: active ? theme.selected : Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+          child: InkWell(
+            onTap: () => _selectTab(tab),
+            borderRadius: BorderRadius.circular(8),
+            child: Stack(alignment: Alignment.centerLeft, children: [
+              if (active)
+                Container(
+                    width: 3,
+                    height: 18,
+                    decoration: BoxDecoration(
+                        color: theme.accent,
+                        borderRadius: BorderRadius.circular(4))),
+              Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  child: Row(children: [
+                    Icon(icon, size: 17, color: color),
+                    const SizedBox(width: 12),
+                    Expanded(
+                        child: Text(label,
+                            style: TextStyle(fontSize: 14, color: color))),
+                  ])),
+            ]),
+          ),
+        ));
+  }
 
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-      child: Row(
-        children: [
-          const Text('画质预设', style: TextStyle(color: LuluTheme.muted)),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Wrap(
-              spacing: 8,
-              children: QualityPreset.all.map((preset) {
-                final isSelected = preset.id == selected.id;
-                return ChoiceChip(
-                  label: Text(preset.label),
-                  selected: isSelected,
-                  selectedColor: LuluTheme.accent,
-                  labelStyle: TextStyle(
-                    color: isSelected ? Colors.white : LuluTheme.text,
-                  ),
-                  onSelected: (_) => onSelected(preset.withFps(selected.fps)),
-                );
-              }).toList(),
+  Widget _themeButtons({bool mobile = false}) {
+    final theme = LuluTheme.of(context);
+    return Wrap(spacing: 6, children: [
+      for (final (mode, icon, label) in [
+        (ThemeMode.light, Icons.light_mode_outlined, '浅色模式'),
+        (ThemeMode.dark, Icons.dark_mode_outlined, '深色模式'),
+      ])
+        Semantics(
+            selected: mode == widget.themeMode,
+            child: IconButton(
+              tooltip: label,
+              onPressed: () => widget.onThemeChanged(mode),
+              style: IconButton.styleFrom(
+                foregroundColor:
+                    mode == widget.themeMode ? theme.text : theme.muted,
+                backgroundColor:
+                    mode == widget.themeMode ? theme.selected : null,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(6)),
+                minimumSize: Size.square(mobile ? 44 : 30),
+                padding: EdgeInsets.zero,
+                tapTargetSize: mobile
+                    ? MaterialTapTargetSize.padded
+                    : MaterialTapTargetSize.shrinkWrap,
+              ),
+              icon: Icon(icon, size: 17),
+            )),
+    ]);
+  }
+
+  Widget _refreshButton() => IconButton(
+        tooltip: '刷新状态',
+        onPressed: _busy || _manualRefresh ? null : _refreshFromToolbar,
+        icon: _manualRefresh
+            ? const SizedBox.square(
+                dimension: 17, child: CircularProgressIndicator(strokeWidth: 2))
+            : const Icon(Icons.refresh, size: 20),
+      );
+
+  Widget _connectionPage(bool windows) {
+    final theme = LuluTheme.of(context);
+    return SafeArea(
+      top: false,
+      bottom: windows,
+      child: Align(
+          alignment: Alignment.topLeft,
+          child: ConstrainedBox(
+            constraints:
+                BoxConstraints(maxWidth: windows ? 960 : double.infinity),
+            child: ListView(
+              key: const PageStorageKey('devices'),
+              padding: windows
+                  ? const EdgeInsets.fromLTRB(32, 28, 32, 24)
+                  : const EdgeInsets.fromLTRB(16, 10, 16, 16),
+              children: [
+                if (windows) ...[
+                  Row(children: [
+                    const Expanded(
+                        child: Text('连接电脑',
+                            style: TextStyle(
+                                fontSize: 22, fontWeight: FontWeight.w600))),
+                    _refreshButton(),
+                    const SizedBox(width: 6),
+                    FilledButton.icon(
+                        onPressed: _busy ? null : _openAddDevice,
+                        icon: const Icon(Icons.add, size: 16),
+                        label: const Text('添加电脑')),
+                  ]),
+                  const SizedBox(height: 16),
+                  _presetBar(),
+                  const SizedBox(height: 24),
+                ],
+                if (_loading)
+                  const Padding(
+                      padding: EdgeInsets.all(48),
+                      child: Center(child: CircularProgressIndicator()))
+                else if (_devices.isEmpty)
+                  _emptyState(windows, theme)
+                else
+                  LayoutBuilder(builder: (context, constraints) {
+                    final columns =
+                        windows && constraints.maxWidth >= 520 ? 2 : 1;
+                    final width =
+                        (constraints.maxWidth - (columns - 1) * 16) / columns;
+                    return Wrap(spacing: 16, runSpacing: 16, children: [
+                      for (final device in _devices)
+                        SizedBox(
+                            key: ValueKey(device.id),
+                            width: width,
+                            child: DeviceCard(
+                              device: device,
+                              status: _status[device.id]?.status,
+                              responseTime: _status[device.id]?.elapsed,
+                              connecting: _connectingId == device.id,
+                              mobile: !windows,
+                              busy: _busy,
+                              onConnect: () => _connect(device),
+                              onEdit: () => _openAddDevice(device),
+                              onDelete: () => _deleteDevice(device),
+                              onDisconnect: windows && device.paired
+                                  ? () => _disconnectWindows(device)
+                                  : null,
+                              onAndroidHelp: Platform.isAndroid
+                                  ? () => _showAndroidHelp(device)
+                                  : null,
+                            )),
+                    ]);
+                  }),
+              ],
             ),
-          ),
-          const SizedBox(width: 8),
-          DropdownButton<int>(
-            value: selected.fps,
-            items: [
-              for (final fps in [30, 60, 75, 90, 120, 144])
-                DropdownMenuItem(value: fps, child: Text('$fps FPS')),
-            ],
-            onChanged: (fps) {
-              if (fps != null) onSelected(selected.withFps(fps));
-            },
-          ),
-        ],
-      ),
+          )),
     );
+  }
+
+  Widget _emptyState(bool windows, LuluTheme theme) => Align(
+        alignment: windows ? Alignment.centerLeft : Alignment.center,
+        child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 540),
+            child: SizedBox(
+                width: double.infinity,
+                child: Card(
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(windows ? 10 : 14),
+                      side: BorderSide(color: theme.border)),
+                  child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 24, vertical: 48),
+                      child: Column(children: [
+                        Container(
+                            width: 48,
+                            height: 48,
+                            decoration: BoxDecoration(
+                                color: theme.background,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: theme.border)),
+                            child: Icon(Icons.desktop_windows_outlined,
+                                size: 21, color: theme.muted)),
+                        const SizedBox(height: 16),
+                        const Text('还没有添加远程电脑',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                                fontSize: 16, fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 6),
+                        ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 300),
+                            child: Text('输入局域网或 Tailscale 组网地址完成配对，即可一键进入桌面。',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                    fontSize: 13, color: theme.muted))),
+                        const SizedBox(height: 20),
+                        FilledButton.icon(
+                          onPressed: _busy ? null : _openAddDevice,
+                          style: windows
+                              ? null
+                              : FilledButton.styleFrom(
+                                  minimumSize: const Size(0, 44),
+                                  shape: const StadiumBorder()),
+                          icon: const Icon(Icons.add, size: 16),
+                          label: const Text('添加第一台电脑'),
+                        ),
+                      ])),
+                ))),
+      );
+
+  Widget _preferences(bool windows) => Card(
+          child: Column(children: [
+        if (windows) ...[
+          Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Text('串流偏好',
+                        style: TextStyle(fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 8),
+                    _presetBar(),
+                  ])),
+          const Divider(),
+        ],
+        Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(children: [
+              const Expanded(
+                  child: Text('界面外观',
+                      style: TextStyle(fontWeight: FontWeight.w600))),
+              _themeButtons(mobile: !windows),
+            ])),
+      ]));
+
+  Widget _presetBar() {
+    final theme = LuluTheme.of(context);
+    return Wrap(
+        spacing: 10,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Text('画质预设', style: TextStyle(color: theme.muted, fontSize: 13)),
+          DecoratedBox(
+            decoration: BoxDecoration(
+                color: theme.isDark ? theme.card : const Color(0xFFEEF2F6),
+                borderRadius: BorderRadius.circular(30),
+                border: Border.all(color: theme.border)),
+            child: Padding(
+                padding: const EdgeInsets.all(3),
+                child: Wrap(children: [
+                  for (final preset in QualityPreset.all)
+                    Semantics(
+                        selected: preset.id == _preset.id,
+                        child: TextButton(
+                          onPressed: () => setState(
+                              () => _preset = preset.withFps(_preset.fps)),
+                          style: TextButton.styleFrom(
+                            shape: const StadiumBorder(),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 4),
+                            minimumSize: const Size(0, 28),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            backgroundColor: preset.id == _preset.id
+                                ? theme.selectedSegment
+                                : null,
+                            foregroundColor: preset.id == _preset.id
+                                ? Colors.white
+                                : theme.muted,
+                            textStyle: const TextStyle(
+                                fontSize: 13, fontWeight: FontWeight.w500),
+                          ),
+                          child: Text(preset.label),
+                        )),
+                ])),
+          ),
+          DecoratedBox(
+            decoration: BoxDecoration(
+                color: theme.card,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: theme.border)),
+            child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: DropdownButtonHideUnderline(
+                    child: DropdownButton<int>(
+                  value: _preset.fps,
+                  dropdownColor: theme.menu,
+                  borderRadius: BorderRadius.circular(8),
+                  isDense: true,
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  style:
+                      LuluTheme.mono.copyWith(color: theme.text, fontSize: 13),
+                  items: [
+                    for (final fps in [30, 60, 75, 90, 120, 144])
+                      DropdownMenuItem(value: fps, child: Text('$fps FPS'))
+                  ],
+                  onChanged: (fps) {
+                    if (fps != null) {
+                      setState(() => _preset = _preset.withFps(fps));
+                    }
+                  },
+                ))),
+          ),
+        ]);
   }
 }
