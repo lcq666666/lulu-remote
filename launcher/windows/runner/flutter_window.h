@@ -8,6 +8,7 @@
 
 #include <memory>
 
+#include "privacy_screen.h"
 #include "win32_window.h"
 
 // A window that does nothing but host a Flutter view.
@@ -33,6 +34,7 @@ class FlutterWindow : public Win32Window {
   bool start_in_tray_;
   bool tray_added_ = false;
   bool prompt_open_ = false;
+  PrivacyScreen privacy_screen_;
   UINT taskbar_created_ = 0;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> tray_channel_;
   // The project to run.

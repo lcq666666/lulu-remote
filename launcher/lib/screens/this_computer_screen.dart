@@ -10,6 +10,7 @@ import '../services/component_installer.dart';
 import '../services/host_tray.dart';
 import '../services/mesh_status_service.dart';
 import '../widgets/lulu_ui.dart';
+import '../widgets/privacy_screen_settings.dart';
 import 'setup_checklist_screen.dart';
 
 class ThisComputerScreen extends StatefulWidget {
@@ -333,6 +334,8 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
                       }),
             ),
           ],
+          const Divider(),
+          const PrivacyScreenSettings(),
           const Divider(),
           ListTile(
             leading: const Icon(Icons.settings_outlined),

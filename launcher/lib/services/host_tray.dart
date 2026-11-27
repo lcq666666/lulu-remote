@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import '../models/device.dart';
 import 'mesh_status_service.dart';
 import 'pairing_worker_client.dart';
+import 'privacy_screen_service.dart';
 
 typedef _Account = ({String user, String password});
 
@@ -31,7 +32,9 @@ class HostTray {
 
   Future<void> start() async {
     _channel.setMethodCallHandler((call) async {
-      if (call.method == 'dismissPrompt') {
+      if (call.method == 'privacyScreenDismissed') {
+        PrivacyScreenService.instance.previewClosed();
+      } else if (call.method == 'dismissPrompt') {
         final route = _prompt;
         if (route != null && route.isCurrent) route.navigator?.pop();
       }
@@ -52,7 +55,11 @@ class HostTray {
     } on Exception {
       // The host screen can retry registration if Windows storage is unavailable.
     }
-    Timer.periodic(const Duration(seconds: 2), (_) => unawaited(_poll()));
+    Timer.periodic(const Duration(seconds: 2), (_) {
+      unawaited(PrivacyScreenService.instance.poll());
+      unawaited(_poll());
+    });
+    unawaited(PrivacyScreenService.instance.poll());
     await _poll();
   }
 
