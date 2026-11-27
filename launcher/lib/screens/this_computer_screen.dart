@@ -11,6 +11,7 @@ import '../services/host_tray.dart';
 import '../services/mesh_status_service.dart';
 import '../widgets/auto_lock_tile.dart';
 import '../widgets/lulu_ui.dart';
+import '../widgets/connection_log_view.dart';
 import '../widgets/file_transfer_settings.dart';
 import '../widgets/privacy_screen_settings.dart';
 import 'setup_checklist_screen.dart';
@@ -340,6 +341,14 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
           const PrivacyScreenSettings(),
           const Divider(),
           const FileTransferSettings(),
+          const Divider(),
+          ListTile(
+            leading: const Icon(Icons.history),
+            title: const Text('连接记录'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push<void>(
+                MaterialPageRoute(builder: (_) => const ConnectionLogView())),
+          ),
           const Divider(),
           const AutoLockTile(),
           const Divider(),
