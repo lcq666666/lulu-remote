@@ -54,7 +54,7 @@ class PrivacyScreenService {
   ValueListenable<bool?> get streaming => _streaming;
   ValueListenable<bool> get previewing => _previewing;
 
-  Future<void> poll() async {
+  Future<void> poll({Future<void> Function(bool?)? onSample}) async {
     if (_polling) return;
     _polling = true;
     try {
@@ -76,6 +76,7 @@ class PrivacyScreenService {
           // No runner API available.
         }
       }
+      if (onSample != null) await onSample(active);
     } finally {
       _polling = false;
     }

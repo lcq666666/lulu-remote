@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/device.dart';
+import 'auto_lock_service.dart';
 import 'mesh_status_service.dart';
 import 'pairing_worker_client.dart';
 import 'privacy_screen_service.dart';
@@ -19,6 +20,7 @@ class HostTray {
   final navigator = GlobalKey<NavigatorState>();
   static const _channel = MethodChannel('lulu/host_tray');
   final _api = PairingWorkerClient();
+  final _autoLock = AutoLockService();
   final _local = Device(id: 'local', name: '本机', meshAddress: 'localhost');
   final _seen = <String, Duration>{};
   final _dismissed = <String>{};
@@ -56,12 +58,15 @@ class HostTray {
       // The host screen can retry registration if Windows storage is unavailable.
     }
     Timer.periodic(const Duration(seconds: 2), (_) {
-      unawaited(PrivacyScreenService.instance.poll());
+      unawaited(_pollSession());
       unawaited(_poll());
     });
-    unawaited(PrivacyScreenService.instance.poll());
+    unawaited(_pollSession());
     await _poll();
   }
+
+  Future<void> _pollSession() =>
+      PrivacyScreenService.instance.poll(onSample: _autoLock.onSessionSample);
 
   Future<void> register() async {
     if (_registering || _presenting) return;
