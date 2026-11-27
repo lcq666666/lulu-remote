@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lulu_remote/services/connection_log.dart';
+import 'package:lulu_remote/services/sunshine_stream_log.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -27,6 +28,28 @@ void main() {
     expect(record.duration, const Duration(minutes: 2));
     expect(record.kind, ConnectionKind.streaming);
     expect(record.outcome, ConnectionOutcome.completed);
+  });
+
+  test('formats a failed stream using Sunshine evidence', () async {
+    final started = DateTime.utc(2026, 11, 28, 1, 10);
+    var clock = started;
+    final observedEnd = started.add(const Duration(seconds: 12));
+    final log = ConnectionLog(
+      now: () => clock,
+      streamEvidence: (sampledStart, sampledEnd) async =>
+          SunshineStreamEvidence(started, observedEnd,
+              failure: SunshineStreamFailure.networkTimeout),
+    );
+    await log.sessionSample(true);
+    clock = started.add(const Duration(seconds: 13));
+    await log.sessionSample(false);
+    final row = (await log.read()).single;
+    expect(row.end, observedEnd);
+    expect(row.outcome, ConnectionOutcome.failed);
+    expect(row.issue, ConnectionIssue.streamNetworkTimeout);
+    expect(row.client, isEmpty);
+    expect(
+        ConnectionLog.exportText([row]), contains('串流失败 · Sunshine 与控制端通信超时'));
   });
 
   test('captures known pairing outcomes and safely exports UTF-8 text',

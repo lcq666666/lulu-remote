@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'sunshine_stream_log.dart';
+
 enum ConnectionKind { pairing, streaming }
 
 enum ConnectionOutcome { completed, expired, failed, interrupted }
@@ -9,12 +11,18 @@ enum ConnectionOutcome { completed, expired, failed, interrupted }
 enum ConnectionIssue {
   pairingLookup,
   pairingEnded,
-  pairingApproval;
+  pairingApproval,
+  streamLaunch,
+  streamInitialTimeout,
+  streamNetworkTimeout;
 
   String get label => switch (this) {
         pairingLookup => '无法核对 Sunshine 配对请求',
         pairingEnded => '配对请求已结束',
         pairingApproval => '未收到 Sunshine 的配对确认',
+        streamLaunch => 'Sunshine 启动串流失败',
+        streamInitialTimeout => 'Sunshine 等待控制端连接超时',
+        streamNetworkTimeout => 'Sunshine 与控制端通信超时',
       };
 
   static ConnectionIssue? read(Object? name) =>
@@ -70,7 +78,8 @@ class ConnectionEntry {
   String get outcomeLabel => switch (outcome) {
         ConnectionOutcome.completed => '完成',
         ConnectionOutcome.expired => '请求结束，结果未知',
-        ConnectionOutcome.failed => '配对未通过',
+        ConnectionOutcome.failed =>
+          kind == ConnectionKind.pairing ? '配对未通过' : '串流失败',
         ConnectionOutcome.interrupted => '记录服务停止',
       };
   String get clientLabel => client.isEmpty ? '未识别控制端' : client;
@@ -87,11 +96,18 @@ class _PairingAttempt {
 }
 
 class ConnectionLog {
-  ConnectionLog({DateTime Function()? now}) : _now = now ?? DateTime.now;
+  ConnectionLog({
+    DateTime Function()? now,
+    Future<SunshineStreamEvidence?> Function(DateTime, DateTime)?
+        streamEvidence,
+  })  : _now = now ?? DateTime.now,
+        _streamEvidence = streamEvidence;
 
-  static final instance = ConnectionLog();
+  static final instance = ConnectionLog(streamEvidence: SunshineStreamLog.read);
   static const _logKey = 'qg_connection_log_v1';
   final DateTime Function() _now;
+  final Future<SunshineStreamEvidence?> Function(DateTime, DateTime)?
+      _streamEvidence;
   Future<void> _writes = Future<void>.value();
   DateTime? _streamStart;
   final _pairing = <String, _PairingAttempt>{};
@@ -115,8 +131,11 @@ class ConnectionLog {
     return result;
   }
 
-  Future<void> _append(ConnectionEntry entry) async {
+  Future<void> _append(ConnectionEntry entry) => _queueEntry(() async => entry);
+
+  Future<void> _queueEntry(Future<ConnectionEntry> Function() load) async {
     final write = _writes.then((_) async {
+      final entry = await load();
       final prefs = await SharedPreferences.getInstance();
       final rows = [entry, ..._decode(prefs)];
       rows.sort((left, right) => right.end.compareTo(left.end));
@@ -134,8 +153,33 @@ class ConnectionLog {
       _streamStart ??= _now();
     } else if (_streamStart case final start? when active == false) {
       _streamStart = null;
-      await _append(ConnectionEntry(ConnectionKind.streaming, start, _now(), '',
-          ConnectionOutcome.completed));
+      final end = _now();
+      await _queueEntry(() async {
+        SunshineStreamEvidence? evidence;
+        try {
+          evidence = await _streamEvidence?.call(start, end);
+        } on Exception {
+          // Keep the sampled connection when the Sunshine log is unreadable.
+        }
+        final issue = switch (evidence?.failure) {
+          SunshineStreamFailure.launch => ConnectionIssue.streamLaunch,
+          SunshineStreamFailure.initialTimeout =>
+            ConnectionIssue.streamInitialTimeout,
+          SunshineStreamFailure.networkTimeout =>
+            ConnectionIssue.streamNetworkTimeout,
+          null => null,
+        };
+        return ConnectionEntry(
+          ConnectionKind.streaming,
+          evidence?.start ?? start,
+          evidence?.end ?? end,
+          '',
+          issue == null
+              ? ConnectionOutcome.completed
+              : ConnectionOutcome.failed,
+          issue: issue,
+        );
+      });
     }
   }
 
