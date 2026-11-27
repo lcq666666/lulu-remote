@@ -225,24 +225,21 @@ jobs:
             dist/android-apk/LULU-Pairing-Worker-Source.zip
             dist/windows-installers/vendor/MANIFEST.md
           body: |
-            ### 0.2.1 更新
+            ### Windows 连接修复
 
-            - Windows 新增侧栏、双列设备卡片和常驻画质栏，并重新设计「让别人连接我」页面。
-            - Android 改为单列设备卡片和底部导航，设备菜单继续提供 Moonlight 连接排障。
-            - 两端新增深浅主题切换，统一添加电脑、四格 PIN、配对进度和连接诊断的样式。
+            - 直接从 LULU 的设备卡进入桌面。首次配对会用已保存的地址打开 Moonlight 的 PIN 窗口，无需到 Moonlight 首页重新添加或输入地址。
+            - LULU 先检查随包和系统安装的 Moonlight 是否能运行，必要时在应用内准备组件。设备卡显示连接端口或组网相关的错误原因。
+            - F01 提供被控端本机黑屏和图片预览。F02 提供远程结束后自动锁屏开关，双机串流断开仍待验收。
 
-            ### Windows
+            两台电脑都可以用 `LULU-Remote-Setup-*.exe` 覆盖同类型安装。安装前先从托盘退出正在运行的 LULU。用 `LULU-Host-Setup-*.exe` 部署专用主机时，会配置登录后自动运行托盘。便携 ZIP 需解压整个文件夹，再打开 `lulu_remote.exe`。
 
-            两台电脑都可下载 `LULU-Remote-Setup-0.2.1.exe` 覆盖安装。安装前可从托盘退出正在运行的 LULU。也可下载 `LULU-Remote-Portable-0.2.1-x64.zip`，解压整个文件夹后打开 `lulu_remote.exe`。
-            被控电脑在「让别人连接我」中开启远程控制并设置本机管理账号。需要专门部署被控电脑时，也可用 `LULU-Host-Setup-0.2.1.exe`，它会设置 Windows 登录后自动在托盘启动。
-            控制电脑在「连接电脑」中填入被控电脑显示的地址，然后发起配对。
+            被控电脑在「让别人连接我」中开启远程控制并配置本机管理账号。控制电脑在 LULU 点已保存设备的连接按钮。首次连接时，在被控电脑的 LULU 托盘提示或 Sunshine 管理页确认 PIN。
 
             ### Android
 
-            从同一个构建下载并安装 `LULU-Remote-*.apk` 和 `LULU-Pairing-Worker-*.apk`。文件名末尾为 `debug` 的 APK 使用调试签名。
-            手机仍需安装 Moonlight，并在里面完成首次配对。跨网连接还需要配置组网。
+            安装同一次构建提供的 `LULU-Remote-*.apk` 和 `LULU-Pairing-Worker-*.apk`。以 `debug` 结尾的 APK 使用调试签名。手机仍需安装 Moonlight，并按原有安卓流程配对。
 
             组件版本、校验值和许可信息见 `MANIFEST.md`。
           fail_on_unmatched_files: true
           draft: false
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, '-beta.') || contains(github.ref_name, '-rc.') }}

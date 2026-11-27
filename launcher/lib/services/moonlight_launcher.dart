@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
@@ -6,131 +8,75 @@ import '../models/device.dart';
 import '../models/quality_preset.dart';
 
 /// Launches the stock Moonlight clients. LULU never renders video itself.
-///
-/// Windows: spawns `moonlight-qt.exe` as a separate process.
-///   stream: moonlight-qt stream <host> "Desktop"
-///             --resolution 1920x1080 --fps 60 --bitrate 15000
-///             --display-mode windowed --absolute-mouse --keep-awake
-///   quit:   moonlight-qt quit <host>
-///   list:   moonlight-qt list <host>
-/// Android: MethodChannel to MainActivity, which fires the Intent.
-///   See android/app/src/main/kotlin/com/lulu/remote/MainActivity.kt.
-///
-/// No Moonlight / Sunshine binary is bundled by this scaffold; the
-/// launcher detects the install and the setup checklist tells the user
-/// what is missing.
 class MoonlightLauncher {
   static const _channel = MethodChannel('lulu.remote/launch');
 
-  // Moonlight looks for portable.dat in its working directory. The bundled
-  // binary's folder contains that file, which would hide the user's existing
-  // Windows pairing records in Moonlight's normal profile.
-  static String get _windowsWorkingDirectory =>
-      File(Platform.resolvedExecutable).parent.path;
-
   Future<bool> isInstalled() async {
-    if (Platform.isWindows) return await findMoonlightQt() != null;
+    if (Platform.isWindows) return await findWindowsClient() != null;
     if (Platform.isAndroid) {
       return await _channel.invokeMethod<bool>('isMoonlightInstalled') ?? false;
     }
     return false;
   }
 
-  /// Known install locations for moonlight-qt.exe on Windows, checked in
-  /// order before falling back to PATH (`where moonlight-qt`).
-  static const windowsSearchPaths = [
-    r'C:\Program Files\Moonlight\moonlight-qt.exe',
-    r'C:\Program Files (x86)\Moonlight\moonlight-qt.exe',
-    r'%LOCALAPPDATA%\Programs\Moonlight\moonlight-qt.exe',
-  ];
+  static Iterable<String> get _installedCandidates sync* {
+    final env = Platform.environment;
+    for (final root in {
+      env['ProgramW6432'],
+      env['ProgramFiles'],
+      env['ProgramFiles(x86)'],
+      if (env['LOCALAPPDATA'] case final String local) '$local\\Programs',
+    }.whereType<String>()) {
+      yield '$root\\Moonlight Game Streaming\\Moonlight.exe';
+      yield '$root\\Moonlight\\Moonlight.exe';
+      yield '$root\\Moonlight\\moonlight-qt.exe';
+    }
+  }
 
-  Future<String?> findMoonlightQt() async {
+  Future<WindowsMoonlight?> findWindowsClient() async {
     if (!Platform.isWindows) return null;
-    final bundled = Directory(
-      '$_windowsWorkingDirectory\\vendor\\moonlight',
-    );
-    if (await bundled.exists()) {
-      await for (final entry
-          in bundled.list(recursive: true, followLinks: false)) {
-        if (entry is File &&
-            entry.uri.pathSegments.last.toLowerCase() == 'moonlight.exe') {
-          return entry.path;
+    final appDirectory = File(Platform.resolvedExecutable).parent;
+    // Outside of the vendor directory, Qt uses the existing Windows profile
+    // instead of the bundled portable.dat. Keep this directory for all calls.
+    final bundled = '${appDirectory.path}\\vendor\\moonlight\\Moonlight.exe';
+    final examined = <String>{};
+    Future<WindowsMoonlight?> firstWorking(Iterable<String> paths) async {
+      for (final path in paths) {
+        if (!examined.add(path.toLowerCase()) || !await File(path).exists()) {
+          continue;
         }
+        final client = WindowsMoonlight(path, appDirectory.path);
+        if (await client.canStart()) return client;
       }
+      return null;
     }
-    for (final raw in windowsSearchPaths) {
-      final expanded = raw.replaceAll(
-        '%LOCALAPPDATA%',
-        Platform.environment['LOCALAPPDATA'] ?? '',
-      );
-      if (await File(expanded).exists()) return expanded;
-    }
+
+    final known = await firstWorking([bundled, ..._installedCandidates]);
+    if (known != null) return known;
+
+    final where = '${Platform.environment['SystemRoot'] ?? r'C:\Windows'}'
+        r'\System32\where.exe';
     try {
-      final result = await Process.run('where', ['moonlight-qt']);
-      if (result.exitCode == 0) {
-        final first = (result.stdout as String).split('\n').first.trim();
-        if (first.isNotEmpty) return first;
-      }
+      final result = await _runCommand(
+          where, ['Moonlight.exe', 'moonlight-qt.exe'],
+          directory: appDirectory.path, timeout: const Duration(seconds: 3));
+      final paths =
+          LineSplitter.split(result.stdout).map((line) => line.trim());
+      return firstWorking(paths.where((path) => File(path).isAbsolute));
     } on ProcessException {
-      // `where` not available — treat as not found.
+      // PATH lookup is optional.
+    } on TimeoutException {
+      // PATH can include unavailable network drives.
     }
     return null;
   }
 
-  /// One-tap connect on Windows. Returns the spawned process so the UI
-  /// can show “connected” state; Moonlight owns the window after that.
-  Future<Process> streamWindows(
-    Device device,
-    QualityPreset preset,
-  ) async {
-    final exe = await findMoonlightQt();
-    if (exe == null) {
-      throw const MoonlightNotInstalledException(
-        '没有找到 moonlight-qt.exe，请先安装 Moonlight Qt（见设置检查清单）。',
-      );
-    }
-    if (!device.paired) {
-      throw const NotPairedException('这台电脑还没配对，请先在 LULU 里配对。');
-    }
-    return Process.start(
-        exe,
-        [
-          'stream',
-          device.meshAddress,
-          device.appName,
-          ...preset.cliArgs,
-          '--display-mode',
-          'windowed',
-          // Desktop use: absolute mouse positioning, keep the host awake.
-          '--absolute-mouse',
-          '--keep-awake',
-        ],
-        workingDirectory: _windowsWorkingDirectory);
-  }
-
   Future<void> quitWindows(Device device) async {
-    final exe = await findMoonlightQt();
-    if (exe == null) {
-      throw const MoonlightNotInstalledException('没有找到 moonlight-qt.exe。');
+    final client = await findWindowsClient();
+    if (client == null) {
+      throw const MoonlightNotInstalledException('没有可运行的 Windows 连接组件。');
     }
-    final result = await Process.run(exe, ['quit', device.meshAddress],
-        workingDirectory: _windowsWorkingDirectory);
-    if (result.exitCode != 0) {
-      final error = (result.stderr as String).trim();
-      throw MoonlightLaunchException(
-        error.isEmpty ? '断开连接失败（退出码 ${result.exitCode}）。' : error,
-      );
-    }
-  }
-
-  Future<String> listAppsWindows(Device device) async {
-    final exe = await findMoonlightQt();
-    if (exe == null) {
-      throw const MoonlightNotInstalledException('没有找到 moonlight-qt.exe。');
-    }
-    final result = await Process.run(exe, ['list', device.meshAddress],
-        workingDirectory: _windowsWorkingDirectory);
-    return result.stdout as String;
+    await client.quit(device);
   }
 
   /// One-tap connect on Android.
@@ -183,6 +129,113 @@ class MoonlightLauncher {
       throw MoonlightLaunchException('拉起 Moonlight 失败：${e.message}');
     }
   }
+}
+
+/// A single Moonlight executable and profile used throughout a connection.
+class WindowsMoonlight {
+  const WindowsMoonlight(this.executable, this.directory);
+
+  final String executable;
+  final String directory;
+
+  static String endpoint(Device device) {
+    if (device.sunshinePort == 47989) return device.meshAddress;
+    return Uri(host: device.meshAddress, port: device.sunshinePort).authority;
+  }
+
+  Future<bool> canStart() async {
+    try {
+      final result = await _runCommand(executable, ['--version'],
+          directory: directory, timeout: const Duration(seconds: 5));
+      return result.exitCode == 0 && result.stdout.contains('Moonlight');
+    } on ProcessException {
+      return false;
+    } on TimeoutException {
+      return false;
+    }
+  }
+
+  /// Moonlight 6.2 exits with -1 when the host is unpaired or cannot be
+  /// discovered. The caller checks host reachability before offering pairing.
+  Future<List<String>?> listApps(Device device) async {
+    final result = await _command('list', device);
+    if (result.exitCode == -1 || result.exitCode == 0xffffffff) return null;
+    if (result.exitCode != 0) {
+      throw MoonlightLaunchException(
+          'Moonlight 无法读取「${device.name}」的应用列表（退出码 ${result.exitCode}）。');
+    }
+    return LineSplitter.split(result.stdout)
+        .where((line) => line.isNotEmpty)
+        .toList();
+  }
+
+  /// The stock client shows the PIN and owns the pairing window. Its exit
+  /// code does not confirm success. Only a later successful list does.
+  Future<void> pair(Device device) async {
+    final process = await Process.start(executable, ['pair', endpoint(device)],
+        workingDirectory: directory);
+    final stdout = process.stdout.drain<void>();
+    final stderr = process.stderr.drain<void>();
+    await process.exitCode;
+    await Future.wait([stdout, stderr]);
+  }
+
+  Future<Process> stream(Device device, QualityPreset preset) => Process.start(
+        executable,
+        [
+          'stream',
+          endpoint(device),
+          device.appName,
+          ...preset.cliArgs,
+          '--display-mode',
+          'windowed',
+          '--absolute-mouse',
+          '--keep-awake',
+        ],
+        workingDirectory: directory,
+      );
+
+  Future<void> quit(Device device) async {
+    final result = await _command('quit', device);
+    if (result.exitCode != 0) {
+      throw MoonlightLaunchException('断开连接失败（退出码 ${result.exitCode}）。');
+    }
+  }
+
+  Future<_CommandResult> _command(String command, Device device) async {
+    try {
+      return await _runCommand(executable, [command, endpoint(device)],
+          directory: directory, timeout: const Duration(seconds: 38));
+    } on TimeoutException {
+      throw MoonlightLaunchException('Moonlight 连接「${device.name}」超时，请重试。');
+    } on ProcessException {
+      throw const MoonlightLaunchException('无法启动 Moonlight，请在连接设置中重新检测组件。');
+    }
+  }
+}
+
+typedef _CommandResult = ({int exitCode, String stdout});
+
+Future<_CommandResult> _runCommand(
+  String executable,
+  List<String> arguments, {
+  required String directory,
+  required Duration timeout,
+}) async {
+  final process =
+      await Process.start(executable, arguments, workingDirectory: directory);
+  final stdout =
+      process.stdout.transform(const Utf8Decoder(allowMalformed: true)).join();
+  final stderr = process.stderr.drain<void>();
+  final result = () async {
+    final code = await process.exitCode;
+    await stderr;
+    return (exitCode: code, stdout: await stdout);
+  }();
+  return result.timeout(timeout, onTimeout: () {
+    process.kill();
+    throw TimeoutException('Moonlight command timed out', timeout);
+  });
 }
 
 class MoonlightNotInstalledException implements Exception {

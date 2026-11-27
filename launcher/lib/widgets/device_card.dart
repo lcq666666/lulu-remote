@@ -13,6 +13,7 @@ class DeviceCard extends StatefulWidget {
       required this.device,
       required this.status,
       this.responseTime,
+      this.statusDetail,
       required this.connecting,
       required this.onConnect,
       this.mobile = false,
@@ -25,6 +26,7 @@ class DeviceCard extends StatefulWidget {
   final Device device;
   final HostStatus? status;
   final Duration? responseTime;
+  final String? statusDetail;
   final bool connecting;
   final bool mobile;
   final bool busy;
@@ -124,6 +126,7 @@ class _DeviceCardState extends State<DeviceCard> {
     final online = widget.status == HostStatus.online;
     final busy = widget.busy || widget.connecting;
     final responseTime = widget.responseTime;
+    final statusDetail = widget.statusDetail;
     final statusColor = switch (widget.status) {
       HostStatus.online => theme.success,
       HostStatus.unreachable => theme.warning,
@@ -238,6 +241,11 @@ class _DeviceCardState extends State<DeviceCard> {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: LuluTheme.mono.copyWith(color: theme.muted, fontSize: 13)),
+          if (statusDetail != null && statusDetail.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(statusDetail,
+                style: TextStyle(color: theme.muted, fontSize: 12)),
+          ],
           const SizedBox(height: 20),
           if (!mobile && widget.onDisconnect != null)
             Row(children: [
