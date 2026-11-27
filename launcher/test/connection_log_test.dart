@@ -52,6 +52,29 @@ void main() {
         ConnectionLog.exportText([row]), contains('串流失败 · Sunshine 与控制端通信超时'));
   });
 
+  test('keeps the verified peer name and omits its address', () async {
+    final started = DateTime.utc(2026, 11, 28, 1, 10);
+    final ended = started.add(const Duration(seconds: 10));
+    var clock = started;
+    final peer = InternetAddress('100.90.8.4');
+    final log = ConnectionLog(
+      now: () => clock,
+      streamEvidence: (_, __) async => SunshineStreamEvidence(started, ended,
+          failure: SunshineStreamFailure.networkTimeout, peerAddress: peer),
+      peerName: (address) async {
+        expect(address, peer);
+        return 'lab-pc';
+      },
+    );
+    await log.sessionSample(true);
+    clock = ended;
+    await log.sessionSample(false);
+    final row = (await ConnectionLog().read()).single;
+    expect(row.client, 'lab-pc');
+    expect(row.toJson().values, isNot(contains(peer.address)));
+    expect(ConnectionLog.exportText([row]), isNot(contains(peer.address)));
+  });
+
   test('captures known pairing outcomes and safely exports UTF-8 text',
       () async {
     final log = ConnectionLog();

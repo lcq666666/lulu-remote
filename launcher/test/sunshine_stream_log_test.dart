@@ -30,6 +30,7 @@ void main() {
       disconnect,
     ])!;
     expect(evidence.failure, SunshineStreamFailure.networkTimeout);
+    expect(evidence.peerAddress?.address, '192.0.2.1');
     expect(evidence.end, DateTime(2026, 11, 28, 12, 0, 19, 750));
   });
 

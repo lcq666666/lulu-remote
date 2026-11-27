@@ -197,6 +197,74 @@ class MeshStatusService {
     }
   }
 
+  Future<String?> tailscalePeerName(InternetAddress address) async {
+    final peer = _normalizePeer(address);
+    if (!Platform.isWindows || !_isTailscaleAddress(peer)) return null;
+    try {
+      final result = await Process.run(
+        _tailscaleCommand(),
+        ['whois', '--json', peer.address],
+      ).timeout(const Duration(seconds: 3));
+      return result.exitCode == 0
+          ? parseTailscalePeerName(result.stdout.toString(), peer)
+          : null;
+    } on Exception {
+      return null;
+    }
+  }
+
+  static InternetAddress _normalizePeer(InternetAddress address) {
+    final bytes = address.rawAddress;
+    if (address.type == InternetAddressType.IPv6 &&
+        bytes.take(10).every((byte) => byte == 0) &&
+        bytes[10] == 0xff &&
+        bytes[11] == 0xff) {
+      return InternetAddress.fromRawAddress(bytes.sublist(12));
+    }
+    return address;
+  }
+
+  static bool _isTailscaleAddress(InternetAddress address) {
+    final bytes = address.rawAddress;
+    if (address.type == InternetAddressType.IPv4) {
+      return bytes[0] == 100 && (bytes[1] & 0xc0) == 0x40;
+    }
+    const prefix = [0xfd, 0x7a, 0x11, 0x5c, 0xa1, 0xe0];
+    return prefix
+        .asMap()
+        .entries
+        .every((pair) => bytes[pair.key] == pair.value);
+  }
+
+  static String? parseTailscalePeerName(
+      String payload, InternetAddress address) {
+    final peer = _normalizePeer(address);
+    if (!_isTailscaleAddress(peer)) return null;
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(payload);
+    } on FormatException {
+      return null;
+    }
+    if (decoded is! Map || decoded['Node'] is! Map) return null;
+    final node = decoded['Node'] as Map;
+    final addresses = node['Addresses'];
+    final name = node['Name'];
+    if (addresses is! List || name is! String) return null;
+    final fullMask = peer.type == InternetAddressType.IPv4 ? '32' : '128';
+    final ownAddress = addresses.whereType<String>().any((address) {
+      final parts = address.split('/');
+      return parts.length == 2 &&
+          parts[1] == fullMask &&
+          InternetAddress.tryParse(parts[0]) == peer;
+    });
+    if (!ownAddress) return null;
+    final host = name.split('.').first;
+    return RegExp(r'^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}$').hasMatch(host)
+        ? host
+        : null;
+  }
+
   String _tailscaleCommand() {
     final installed = File(
       '${Platform.environment['ProgramFiles']}\\Tailscale\\tailscale.exe',

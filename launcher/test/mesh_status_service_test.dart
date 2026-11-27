@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -20,6 +21,25 @@ void main() {
   });
 
   tearDown(() => server.close(force: true));
+
+  test('Tailscale whois matches only an exact node address', () {
+    String? resolve(String ip, List<String> prefixes,
+            {String name = 'lab-pc.private.test.'}) =>
+        MeshStatusService.parseTailscalePeerName(
+            jsonEncode({
+              'Node': {'Addresses': prefixes, 'Name': name}
+            }),
+            InternetAddress(ip));
+    expect(resolve('100.90.8.4', ['100.90.8.4/32']), 'lab-pc');
+    expect(resolve('::ffff:100.90.8.4', ['100.90.8.4/32']), 'lab-pc');
+    expect(resolve('fd7a:115c:a1e0::11', ['fd7a:115c:a1e0:0:0:0:0:11/128']),
+        'lab-pc');
+    expect(resolve('100.90.8.4', ['100.90.8.0/24']), isNull);
+    expect(resolve('100.90.8.4', ['100.90.8.5/32']), isNull);
+    expect(
+        resolve('100.90.8.4', ['100.90.8.4/32'], name: 'spaces here'), isNull);
+    expect(resolve('192.168.1.4', ['192.168.1.4/32']), isNull);
+  });
 
   test('a later probe detects a host that has finished starting', () async {
     var ready = false;

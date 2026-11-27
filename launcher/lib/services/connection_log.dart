@@ -1,7 +1,9 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'mesh_status_service.dart';
 import 'sunshine_stream_log.dart';
 
 enum ConnectionKind { pairing, streaming }
@@ -100,14 +102,20 @@ class ConnectionLog {
     DateTime Function()? now,
     Future<SunshineStreamEvidence?> Function(DateTime, DateTime)?
         streamEvidence,
+    Future<String?> Function(InternetAddress)? peerName,
   })  : _now = now ?? DateTime.now,
-        _streamEvidence = streamEvidence;
+        _streamEvidence = streamEvidence,
+        _peerName = peerName;
 
-  static final instance = ConnectionLog(streamEvidence: SunshineStreamLog.read);
+  static final instance = ConnectionLog(
+    streamEvidence: SunshineStreamLog.read,
+    peerName: MeshStatusService().tailscalePeerName,
+  );
   static const _logKey = 'qg_connection_log_v1';
   final DateTime Function() _now;
   final Future<SunshineStreamEvidence?> Function(DateTime, DateTime)?
       _streamEvidence;
+  final Future<String?> Function(InternetAddress)? _peerName;
   Future<void> _writes = Future<void>.value();
   DateTime? _streamStart;
   final _pairing = <String, _PairingAttempt>{};
@@ -156,8 +164,12 @@ class ConnectionLog {
       final end = _now();
       await _queueEntry(() async {
         SunshineStreamEvidence? evidence;
+        String? client;
         try {
           evidence = await _streamEvidence?.call(start, end);
+          if (evidence?.peerAddress case final peer?) {
+            client = await _peerName?.call(peer);
+          }
         } on Exception {
           // Keep the sampled connection when the Sunshine log is unreadable.
         }
@@ -173,7 +185,7 @@ class ConnectionLog {
           ConnectionKind.streaming,
           evidence?.start ?? start,
           evidence?.end ?? end,
-          '',
+          cleanConnectionName(client ?? ''),
           issue == null
               ? ConnectionOutcome.completed
               : ConnectionOutcome.failed,

@@ -2,18 +2,20 @@ import 'dart:convert';
 import 'dart:io';
 
 class SunshineStreamEvidence {
-  const SunshineStreamEvidence(this.start, this.end, {this.failure});
+  const SunshineStreamEvidence(this.start, this.end,
+      {this.failure, this.peerAddress});
 
   final DateTime start;
   final DateTime end;
   final SunshineStreamFailure? failure;
+  final InternetAddress? peerAddress;
 }
 
 enum SunshineStreamFailure { launch, initialTimeout, networkTimeout }
 
 /// Reads the default Windows installation log after a polled stream ends.
-/// Only fixed Sunshine events leave this parser. No log lines or endpoints
-/// are retained or exported.
+/// The timeout peer address is available for an immediate local lookup.
+/// Only the resulting peer name is retained in the connection history.
 class SunshineStreamLog {
   static const _maxBytes = 64 * 1024;
   static final _event = RegExp(
@@ -96,7 +98,13 @@ class SunshineStreamLog {
         continue;
       }
       if (time.isBefore(sampledStart)) continue;
-      final failure = _failure(level, message);
+      final peer = level == 'Info'
+          ? InternetAddress.tryParse(
+              _timeout.firstMatch(message)?.group(1) ?? '')
+          : null;
+      final failure = peer == null
+          ? _failure(level, message)
+          : SunshineStreamFailure.networkTimeout;
       if (level == 'Info' && message == 'CLIENT DISCONNECTED') {
         // Sunshine may write a disconnect notification after a timeout.
         if (result?.failure != null) continue;
@@ -108,8 +116,8 @@ class SunshineStreamLog {
         if (result != null || (connected != null && time.isBefore(connected))) {
           return null;
         }
-        result =
-            SunshineStreamEvidence(connected ?? start, time, failure: failure);
+        result = SunshineStreamEvidence(connected ?? start, time,
+            failure: failure, peerAddress: peer);
       }
     }
     return result;
@@ -123,10 +131,6 @@ class SunshineStreamLog {
         _ => null,
       };
     }
-    final match = level == 'Info' ? _timeout.firstMatch(message) : null;
-    final address = match?.group(1);
-    return address != null && InternetAddress.tryParse(address) != null
-        ? SunshineStreamFailure.networkTimeout
-        : null;
+    return null;
   }
 }
