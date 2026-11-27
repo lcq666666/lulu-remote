@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -90,6 +91,68 @@ void main() {
         sendBytes('denied.txt', [1]),
         throwsA(isA<FileTransferFailure>()
             .having((failure) => failure.message, 'message', contains('已关闭'))));
+    expect(await root.list().isEmpty, isTrue);
+  });
+
+  test('explains how to enable receiving when nothing is listening', () async {
+    final closedListener =
+        await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final unavailable = endpoint.replace(port: closedListener.port);
+    await closedListener.close(force: true);
+    await expectLater(
+      sender.send(
+        endpoint: unavailable,
+        code: code,
+        name: 'denied.txt',
+        length: 1,
+        openRead: () => Stream.value([1]),
+        onProgress: (_, __) {},
+      ),
+      throwsA(isA<FileTransferFailure>().having(
+          (failure) => failure.message, 'message', contains('已开启「文件接收」'))),
+    );
+  });
+
+  test('reports disabled receiving during upload and removes partial data',
+      () async {
+    final block = Uint8List(65536);
+    final continueUpload = Completer<void>();
+    var readCount = 0;
+    Stream<List<int>> data() async* {
+      final isUpload = ++readCount == 2;
+      yield block;
+      if (isUpload) await continueUpload.future;
+      yield block;
+    }
+
+    final transfer = sender.send(
+      endpoint: endpoint,
+      code: code,
+      name: 'paused.bin',
+      length: block.length * 2,
+      openRead: data,
+      onProgress: (_, __) {},
+    );
+    final rejection = expectLater(
+      transfer,
+      throwsA(isA<FileTransferFailure>()
+          .having((failure) => failure.message, 'message', contains('已关闭'))),
+    );
+    try {
+      var stagingCreated = false;
+      for (var attempt = 0; attempt < 100; attempt++) {
+        if (!await root.list().isEmpty) {
+          stagingCreated = true;
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(stagingCreated, isTrue);
+      receiver.enabled = false;
+    } finally {
+      continueUpload.complete();
+    }
+    await rejection;
     expect(await root.list().isEmpty, isTrue);
   });
 

@@ -179,7 +179,11 @@ class FileTransferServer {
       var received = 0;
       await for (final chunk in request.timeout(_idleTimeout)) {
         received += chunk.length;
-        if (!enabled || received > size) throw const FormatException();
+        if (!enabled) {
+          response.statusCode = HttpStatus.forbidden;
+          return;
+        }
+        if (received > size) throw const FormatException();
         sink.add(chunk);
         await opened.writeFrom(chunk);
       }
@@ -275,12 +279,9 @@ class FileTransferClient {
     try {
       final digest = (await sha256.bind(_read(openRead)).first).toString();
       final clientNonce = _nonce();
-      final hello = await client.getUrl(endpoint.replace(path: _challengePath));
-      hello.followRedirects = false;
-      hello.headers.set('x-qg-client', clientNonce);
-      hello.headers.set('x-qg-proof', _sign(code, ['hello', clientNonce]));
       final handshake = await _readJson(
-          await hello.close().timeout(_headersTimeout), HttpStatus.ok);
+          await _requestChallenge(client, endpoint, code, clientNonce),
+          HttpStatus.ok);
       final challenge = handshake['challenge'];
       if (challenge is! String ||
           !_noncePattern.hasMatch(challenge) ||
@@ -301,7 +302,7 @@ class FileTransferClient {
       final stopwatch = Stopwatch()..start();
       var sent = 0;
       var nextProgress = 0;
-      await request.addStream(_read(openRead).asyncMap((chunk) async {
+      final chunks = _read(openRead).asyncMap((chunk) async {
         sent += chunk.length;
         if (bytesPerSecond > 0) {
           final delay =
@@ -316,9 +317,17 @@ class FileTransferClient {
           nextProgress = elapsed + 200;
         }
         return chunk;
-      }));
-      final receipt = await _readJson(
-          await request.close().timeout(_idleTimeout), HttpStatus.created);
+      });
+      final HttpClientResponse response;
+      try {
+        await request.addStream(chunks);
+        response = await request.close().timeout(_idleTimeout);
+      } on IOException {
+        // An early rejection can close the socket before upload completes.
+        await _checkInterruptedReceiver(client, endpoint, code);
+        rethrow;
+      }
+      final receipt = await _readJson(response, HttpStatus.created);
       final savedName = receipt['name'];
       if (savedName is! String ||
           !_matches(receipt['proof'] as String? ?? '',
@@ -333,6 +342,37 @@ class FileTransferClient {
     } finally {
       client.close(force: true);
       _current = null;
+    }
+  }
+
+  Future<HttpClientResponse> _requestChallenge(
+      HttpClient client, Uri endpoint, String code, String nonce) async {
+    try {
+      final request =
+          await client.getUrl(endpoint.replace(path: _challengePath));
+      request.followRedirects = false;
+      request.headers.set('x-qg-client', nonce);
+      request.headers.set('x-qg-proof', _sign(code, ['hello', nonce]));
+      return await request.close().timeout(_headersTimeout);
+    } on SocketException {
+      if (_cancelled) throw const FileTransferFailure('已取消。');
+      throw const FileTransferFailure('无法连接文件接收服务。请确认对方已开启「文件接收」，且两台设备都在线。');
+    }
+  }
+
+  Future<void> _checkInterruptedReceiver(
+      HttpClient client, Uri endpoint, String code) async {
+    if (_cancelled) return;
+    try {
+      final response =
+          await _requestChallenge(client, endpoint, code, _nonce());
+      if (response.statusCode == HttpStatus.forbidden) {
+        throw const FileTransferFailure('对方电脑已关闭文件接收。');
+      }
+    } on IOException {
+      // Preserve the original upload failure when no status is available.
+    } on TimeoutException {
+      // Preserve the original upload failure when no status is available.
     }
   }
 
