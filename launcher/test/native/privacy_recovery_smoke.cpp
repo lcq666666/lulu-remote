@@ -70,6 +70,12 @@ int main() {
   if (!active || !IsWindowVisible(live) || !CoversVirtualScreen(live) ||
       !GetWindowDisplayAffinity(live, &affinity) ||
       affinity != WDA_EXCLUDEFROMCAPTURE || !curtain.Renew()) return 6;
+  // Simulate geometry drift without sending WM_DISPLAYCHANGE. A successful
+  // lease renewal must put the entire virtual desktop behind the curtain.
+  if (!SetWindowPos(live, nullptr, 0, 0, 32, 32,
+                    SWP_NOZORDER | SWP_NOACTIVATE) ||
+      CoversVirtualScreen(live) || !curtain.Renew() ||
+      !CoversVirtualScreen(live)) return 10;
   // Deliver the lease expiry directly instead of leaving a curtain visible
   // for eight seconds. A recovered session can retry with the same ID.
   SendMessageW(live, WM_TIMER, 1, 0);
@@ -84,6 +90,6 @@ int main() {
   curtain.Hide();
   DestroyWindow(owner);
   CoUninitialize();
-  std::cout << "Privacy curtain: preview fallback, lease recovery and hotkey suppression passed\n";
+  std::cout << "Privacy curtain: preview fallback, geometry recovery, lease recovery and hotkey suppression passed\n";
   return 0;
 }

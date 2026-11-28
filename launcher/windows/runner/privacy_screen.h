@@ -39,7 +39,7 @@ class PrivacyScreen {
   static LRESULT CALLBACK KeyboardHook(int code, WPARAM wparam, LPARAM lparam);
   static LRESULT CALLBACK MouseHook(int code, WPARAM wparam, LPARAM lparam);
   bool PrepareLive(HINSTANCE instance);
-  void Layout();
+  bool Layout();
   void DismissByUser();
   LRESULT HandleMessage(UINT message, WPARAM wparam, LPARAM lparam);
 
