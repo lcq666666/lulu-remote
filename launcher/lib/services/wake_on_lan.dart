@@ -3,7 +3,13 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:flutter/services.dart'
+    show MethodChannel, MissingPluginException, PlatformException;
+
 enum WakeResult { online, timedOut, cancelled }
+
+typedef LanWakeRoute = ({InternetAddress source, InternetAddress broadcast});
+typedef WakeDatagramSender = Future<bool> Function(Uint8List, LanWakeRoute);
 
 class WakeOnLan {
   static const limit = Duration(minutes: 2);
@@ -39,17 +45,83 @@ class WakeOnLan {
     ]);
   }
 
-  static Future<void> send(String mac) async {
-    final payload = packet(mac);
-    final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+  static LanWakeRoute? routeFor(String address, int prefix) {
+    final source = InternetAddress.tryParse(address);
+    if (source == null ||
+        source.type != InternetAddressType.IPv4 ||
+        source.isLoopback ||
+        source.isMulticast ||
+        prefix < 1 ||
+        prefix > 30) return null;
+    final raw = source.rawAddress;
+    if (raw[0] == 0 || raw[0] >= 224) return null;
+    final broadcast = Uint8List(4);
+    for (var i = 0; i < 4; i++) {
+      final hostBits = (8 - prefix + 8 * i).clamp(0, 8);
+      broadcast[i] = raw[i] | ((1 << hostBits) - 1);
+    }
+    if (source == InternetAddress.fromRawAddress(broadcast)) return null;
+    return (
+      source: source,
+      broadcast: InternetAddress.fromRawAddress(broadcast)
+    );
+  }
+
+  static Future<List<LanWakeRoute>> _windowsRoutes() async {
+    if (!Platform.isWindows) return [];
+    const channel = MethodChannel('lulu/host_tray');
+    try {
+      final rows = await channel.invokeListMethod<Object?>('wakeLanInterfaces');
+      return [
+        for (final row in rows ?? [])
+          if (row is Map && row['address'] is String && row['prefix'] is int)
+            if (routeFor(row['address'] as String, row['prefix'] as int)
+                case final route?)
+              route,
+      ];
+    } on PlatformException {
+      return [];
+    } on MissingPluginException {
+      return [];
+    }
+  }
+
+  static Future<bool> _sendDatagram(
+      Uint8List payload, LanWakeRoute route) async {
+    final socket = await RawDatagramSocket.bind(route.source, 0);
     try {
       socket.broadcastEnabled = true;
-      if (socket.send(payload, InternetAddress('255.255.255.255'), 9) !=
-          payload.length) {
-        throw const SocketException('网络未能发出唤醒包。');
-      }
+      return socket.send(payload, route.broadcast, 9) == payload.length;
     } finally {
       socket.close();
+    }
+  }
+
+  static Future<void> send(String mac) async =>
+      sendViaRoutes(packet(mac), await _windowsRoutes(), _sendDatagram);
+
+  /// Try every distinct local route so VPN/default-route metrics don't pick
+  /// the wrong LAN. Keep the original limited broadcast when no route works.
+  static Future<void> sendViaRoutes(Uint8List payload,
+      Iterable<LanWakeRoute> routes, WakeDatagramSender send) async {
+    Future<bool> attempt(LanWakeRoute route) async {
+      try {
+        return await send(payload, route);
+      } on SocketException {
+        return false;
+      }
+    }
+
+    var sent = false;
+    for (final route in routes.toSet()) {
+      if (await attempt(route)) sent = true;
+    }
+    if (!sent &&
+        !await attempt((
+          source: InternetAddress.anyIPv4,
+          broadcast: InternetAddress('255.255.255.255'),
+        ))) {
+      throw const SocketException('网络未能发出唤醒包。');
     }
   }
 

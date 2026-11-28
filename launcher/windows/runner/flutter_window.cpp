@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 
+#include "lan_interfaces.h"
 #include "moonlight_shortcut.h"
 #include "resource.h"
 #include "sunshine_session.h"
@@ -245,6 +246,15 @@ void FlutterWindow::HandleTrayCall(
     }
     result->Success(flutter::EncodableValue(
         SwitchStreamMonitor(static_cast<DWORD>(*pid), *screen, *focus)));
+  } else if (method == "wakeLanInterfaces") {
+    flutter::EncodableList addresses;
+    for (const auto& address : ActiveLanInterfaceAddresses()) {
+      addresses.emplace_back(flutter::EncodableMap{
+          {flutter::EncodableValue("address"), flutter::EncodableValue(address.address)},
+          {flutter::EncodableValue("prefix"), flutter::EncodableValue(address.prefix_length)},
+      });
+    }
+    result->Success(flutter::EncodableValue(addresses));
   } else if (method == "moonlightStartMenuTargets") {
     flutter::EncodableList paths;
     for (const auto& path : MoonlightStartMenuTargets()) {
