@@ -37,9 +37,6 @@ void main() {
     }
 
     final public = await cli(['init']);
-    final key = await cli(['keys', 'generate']);
-    final spareKey = await cli(['keys', 'generate']);
-    final replacementKey = await cli(['keys', 'generate']);
     final socket = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     final port = socket.port;
     await socket.close();
@@ -81,10 +78,25 @@ void main() {
             throwsA(isA<ActivationFailure>()
                 .having((e) => e.error, 'error', error)));
 
-    await startServer();
+    const unissuedKey = 'LULU-2222-2222-2222-2222';
+    expect(normalizeActivationKey(unissuedKey), unissuedKey);
     expect((await service.load()).active, isFalse);
+    // This address passes client-side validation but the server isn't yet
+    // listening. Verify a real connection failure, not just a rejected URL.
+    await expectError(service.activate(unissuedKey, host, windows),
+        ActivationError.unreachable);
+
+    await startServer();
     await expectError(
         service.activate('wrong', host, windows), ActivationError.wrongKey);
+    // The database is still empty: the checksum is valid, but Go returns 404.
+    await expectError(
+        service.activate(unissuedKey, host, windows), ActivationError.wrongKey);
+    expect((await service.load()).active, isFalse);
+
+    final key = await cli(['keys', 'generate']);
+    final spareKey = await cli(['keys', 'generate']);
+    final replacementKey = await cli(['keys', 'generate']);
     await expectError(service.activate(key, '1.1.1.1:8765', windows),
         ActivationError.unreachable);
     final fake = ActivationService(
