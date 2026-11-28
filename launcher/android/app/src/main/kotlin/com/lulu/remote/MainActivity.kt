@@ -36,6 +36,10 @@ class MainActivity : FlutterActivity() {
                     "isMoonlightInstalled" -> {
                         result.success(packageManager.getLaunchIntentForPackage("com.limelight") != null)
                     }
+                    "androidConnectionApps" -> result.success(mapOf(
+                        "moonlight" to (packageManager.getLaunchIntentForPackage("com.limelight") != null),
+                        "tailscale" to (packageManager.getLaunchIntentForPackage("com.tailscale.ipn") != null)
+                    ))
                     "openMoonlight" -> result.success(
                         openMoonlight(packageManager.getLaunchIntentForPackage("com.limelight"))
                     )
