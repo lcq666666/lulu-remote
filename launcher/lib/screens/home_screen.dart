@@ -17,10 +17,13 @@ import '../services/mesh_status_service.dart';
 import '../services/moonlight_launcher.dart';
 import '../services/power_service.dart';
 import '../services/secure_store.dart';
+import '../services/wake_on_lan.dart';
+import '../services/wake_relay_service.dart';
 import '../widgets/device_card.dart';
 import '../widgets/file_transfer_dialog.dart';
 import '../widgets/lulu_ui.dart';
 import '../widgets/power_settings.dart';
+import '../widgets/wake_relay_settings.dart';
 import 'add_device_screen.dart';
 import 'pairing_screen.dart';
 import 'setup_checklist_screen.dart';
@@ -64,6 +67,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Map<String, _HostCheck> _status = {};
   QualityPreset _preset = QualityPreset.office1080;
   String? _connectingId;
+  final _waking = <String>{};
   bool _loading = true;
   bool _saving = false;
   Timer? _statusTimer;
@@ -117,6 +121,57 @@ class _HomeScreenState extends State<HomeScreen> {
       elapsed: watch.elapsed,
       hostUuid: result.hostUuid,
     );
+  }
+
+  Future<void> _wake(Device device) async {
+    final mac = device.wakeMac;
+    if (mac == null || _busy || _waking.contains(device.id)) return;
+    setState(() => _waking.add(device.id));
+    final relay = device.wakeRelayAddress;
+    try {
+      if (relay == null) {
+        await WakeOnLan.send(mac);
+      } else {
+        if (!isPrivateTransferAddress(relay)) {
+          throw const WakeRelayException('请检查转发电脑的组网 IPv4。');
+        }
+        final code = await askWakeRelayCode(context, relay);
+        if (!mounted || code == null) return;
+        await WakeRelayClient(relay, code).wake(mac);
+        if (mounted) showLuluSnack(context, '转发电脑已发送唤醒包，正在等待上线。');
+      }
+      final result = await WakeOnLan.waitForSunshine(
+        probe: () =>
+            _mesh.check(device).then((status) => status == HostStatus.online),
+        cancelled: () => !mounted,
+      );
+      if (!mounted) return;
+      if (result == WakeResult.online) {
+        ++_statusRefresh;
+        final check = await _measureHostCheck(device);
+        if (!mounted) return;
+        setState(() => _status[device.id] = check);
+        showLuluSnack(
+            context,
+            check.status == HostStatus.online
+                ? '电脑已上线，可以连接。'
+                : '电脑有过响应，目前远程服务仍未就绪。');
+      } else if (result == WakeResult.timedOut) {
+        showLuluSnack(
+            context,
+            relay == null
+                ? WakeOnLan.timeoutMessage
+                : WakeOnLan.relayTimeoutMessage);
+      }
+    } on WakeRelayException catch (error) {
+      if (mounted) showLuluSnack(context, '唤醒转发失败。${error.message}');
+    } on SocketException {
+      if (mounted) showLuluSnack(context, '唤醒包发送失败。请检查本机的局域网连接。');
+    } on FormatException {
+      if (mounted) showLuluSnack(context, '请在编辑电脑中检查有线网卡 MAC 地址。');
+    } finally {
+      if (mounted) setState(() => _waking.remove(device.id));
+    }
   }
 
   Future<_HostCheck> _checkConnection(Device device) async {
@@ -770,6 +825,10 @@ class _HomeScreenState extends State<HomeScreen> {
                               onConnect: () => _connect(device),
                               connectLabel:
                                   Platform.isAndroid ? '连接 Moonlight' : null,
+                              onWake: device.wakeMac == null
+                                  ? null
+                                  : () => _wake(device),
+                              waking: _waking.contains(device.id),
                               onTransfer: () => showDialog<void>(
                                 context: context,
                                 barrierDismissible: false,

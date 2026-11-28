@@ -21,6 +21,8 @@ class DeviceCard extends StatefulWidget {
       this.mobile = false,
       this.busy = false,
       this.onTransfer,
+      this.onWake,
+      this.waking = false,
       this.onPower,
       this.onEdit,
       this.onDelete,
@@ -37,6 +39,8 @@ class DeviceCard extends StatefulWidget {
   final VoidCallback onConnect;
   final String? connectLabel;
   final VoidCallback? onTransfer;
+  final VoidCallback? onWake;
+  final bool waking;
   final ValueChanged<PowerAction>? onPower;
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
@@ -154,7 +158,8 @@ class _DeviceCardState extends State<DeviceCard> {
     final error = Theme.of(context).colorScheme.error;
     final mobile = widget.mobile;
     final online = widget.status == HostStatus.online;
-    final busy = widget.busy || widget.connecting;
+    final busy = widget.busy || widget.connecting || widget.waking;
+    final canWake = widget.onWake != null && widget.status != null && !online;
     final responseTime = widget.responseTime;
     final statusDetail = widget.statusDetail;
     final statusColor = switch (widget.status) {
@@ -163,7 +168,7 @@ class _DeviceCardState extends State<DeviceCard> {
       _ => theme.muted,
     };
     final primary = FilledButton(
-      onPressed: busy ? null : widget.onConnect,
+      onPressed: busy ? null : (canWake ? widget.onWake : widget.onConnect),
       style: FilledButton.styleFrom(
         minimumSize: Size(0, mobile ? 44 : 38),
         shape: mobile ? const StadiumBorder() : null,
@@ -177,7 +182,7 @@ class _DeviceCardState extends State<DeviceCard> {
           mainAxisAlignment: MainAxisAlignment.center,
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (widget.connecting) ...[
+            if (widget.connecting || widget.waking) ...[
               SizedBox.square(
                   dimension: 14,
                   child: CircularProgressIndicator(
@@ -186,10 +191,14 @@ class _DeviceCardState extends State<DeviceCard> {
             ],
             Flexible(
                 child: Text(
-                    widget.connecting
-                        ? '连接中…'
-                        : widget.connectLabel ??
-                            (widget.device.paired ? '进入桌面' : '首次连接'),
+                    widget.waking
+                        ? '等待开机…'
+                        : widget.connecting
+                            ? '连接中…'
+                            : canWake
+                                ? '开机'
+                                : widget.connectLabel ??
+                                    (widget.device.paired ? '进入桌面' : '首次连接'),
                     textAlign: TextAlign.center)),
           ]),
     );
@@ -303,6 +312,11 @@ class _DeviceCardState extends State<DeviceCard> {
             ])
           else
             primary,
+          if (canWake && !widget.waking)
+            TextButton(
+              onPressed: busy ? null : widget.onConnect,
+              child: const Text('直接尝试连接'),
+            ),
         ]),
       ),
     );

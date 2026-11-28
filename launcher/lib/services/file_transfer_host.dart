@@ -8,6 +8,8 @@ import 'file_transfer_service.dart';
 import 'mesh_status_service.dart';
 import 'power_service.dart';
 import 'secure_store.dart';
+import 'wake_on_lan.dart';
+import 'wake_relay_service.dart';
 
 bool isPrivateTransferAddress(String address) {
   final ip = InternetAddress.tryParse(address);
@@ -31,6 +33,9 @@ class FileTransferHost {
   FileTransferServer? _handler;
   Future<void> _fileCleanup = Future<void>.value();
   PowerServer? _power;
+  WakeRelayServer? _wakeRelay;
+  Future<String>? _readingWakeRelayCode;
+  static const _wakeTargetsKey = 'qg_wake_targets';
   Future<String>? _readingCode;
   int _settingsGeneration = 0;
   Timer? _timer;
@@ -120,6 +125,64 @@ class FileTransferHost {
 
   Future<void> refresh() => _updates = _updates.then((_) => _refresh());
 
+  Future<Set<String>> wakeTargets() async {
+    final prefs = await SharedPreferences.getInstance();
+    return {
+      for (final value in prefs.getStringList(_wakeTargetsKey) ?? <String>[])
+        if (WakeOnLan.normalizeMac(value) case final mac?) mac,
+    };
+  }
+
+  Future<void> setWakeTargets(Iterable<String> values) async {
+    final targets = <String>{};
+    for (final value in values) {
+      final mac = WakeOnLan.normalizeMac(value);
+      if (mac == null) throw const FormatException('请填写有效的有线网卡 MAC 地址。');
+      targets.add(mac);
+    }
+    if (targets.length > 16) throw const FormatException('最多登记 16 台电脑。');
+    _settingsGeneration++;
+    _disableWakeRelay();
+    final prefs = await SharedPreferences.getInstance();
+    if (!await prefs.setStringList(_wakeTargetsKey, targets.toList())) {
+      await prefs.reload();
+      throw StateError('无法保存唤醒转发设置。');
+    }
+    _settingsGeneration++;
+    await refresh();
+  }
+
+  Future<String> wakeRelayCode() => _readingWakeRelayCode ??=
+      _loadWakeRelayCode().whenComplete(() => _readingWakeRelayCode = null);
+
+  Future<String> _loadWakeRelayCode() async {
+    final stored = await _secureStore.readHostWakeRelayCode();
+    return stored != null && validTransferCode(stored)
+        ? stored
+        : _writeWakeRelayCode();
+  }
+
+  Future<String> _writeWakeRelayCode() async {
+    final secret = newTransferCode();
+    await _secureStore.writeHostWakeRelayCode(secret);
+    return secret;
+  }
+
+  Future<String> rotateWakeRelayCode() async {
+    if (_readingWakeRelayCode case final active?) await active;
+    _settingsGeneration++;
+    _disableWakeRelay();
+    final secret = await _writeWakeRelayCode();
+    _settingsGeneration++;
+    await refresh();
+    return secret;
+  }
+
+  void _disableWakeRelay() {
+    _wakeRelay?.active = false;
+    _wakeRelay = null;
+  }
+
   Future<void> _retireFileReceiver() {
     if (_handler case final handler?) {
       _handler = null;
@@ -152,6 +215,7 @@ class FileTransferHost {
 
   Future<void> _disableCurrent() async {
     _disablePower();
+    _disableWakeRelay();
     await _retireFileReceiver();
     final listeners = _listeners.values.toList();
     _listeners.clear();
@@ -165,8 +229,10 @@ class FileTransferHost {
     try {
       final fileEnabled = await isEnabled();
       final powerEnabled = await PowerAccess.instance.isEnabled();
+      final targets = await wakeTargets();
       if (generation != _settingsGeneration) return;
-      if (_timer == null || !(fileEnabled || powerEnabled)) {
+      if (_timer == null ||
+          !(fileEnabled || powerEnabled || targets.isNotEmpty)) {
         await _disableCurrent();
         return;
       }
@@ -174,6 +240,7 @@ class FileTransferHost {
       final secret = fileEnabled ? await code() : null;
       final powerSecret =
           powerEnabled ? await PowerAccess.instance.code() : null;
+      final wakeSecret = targets.isEmpty ? null : await wakeRelayCode();
       final addresses = (await MeshStatusService().localAddresses())
           .where((entry) =>
               entry.network != null && isPrivateTransferAddress(entry.address))
@@ -197,6 +264,16 @@ class FileTransferHost {
       } else if (_power?.code != powerSecret) {
         _disablePower();
         _power = PowerServer(code: powerSecret, run: PowerServer.runOnWindows);
+      }
+      if (wakeSecret == null) {
+        _disableWakeRelay();
+      } else {
+        if (_wakeRelay?.code != wakeSecret) {
+          _disableWakeRelay();
+          _wakeRelay =
+              WakeRelayServer(code: wakeSecret, sendWake: WakeOnLan.send);
+        }
+        _wakeRelay!.wakeTargets = targets;
       }
       final expired = _listeners.keys
           .where((address) => !addresses.contains(address))
@@ -231,6 +308,11 @@ class FileTransferHost {
       if (PowerServer.handles(request.uri.path)) {
         if (_power case final power?) {
           unawaited(power.handle(request));
+          return;
+        }
+      } else if (WakeRelayServer.handles(request.uri.path)) {
+        if (_wakeRelay case final relay?) {
+          unawaited(relay.handle(request));
           return;
         }
       } else if (_handler case final files?) {

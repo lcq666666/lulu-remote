@@ -60,6 +60,11 @@ class SecureStore {
   Future<void> writeSunshinePassword(String deviceId, String password) =>
       _storage.write(key: _key('sunshine_password', deviceId), value: password);
 
+  Future<String?> readHostWakeRelayCode() =>
+      _storage.read(key: _key('host_wake_relay_code'));
+  Future<void> writeHostWakeRelayCode(String value) =>
+      _storage.write(key: _key('host_wake_relay_code'), value: value);
+
   Future<String?> readHostTransferCode() =>
       _storage.read(key: _key('host_transfer_code'));
   Future<void> writeHostTransferCode(String value) =>
