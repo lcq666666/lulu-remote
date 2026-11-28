@@ -5,7 +5,7 @@ import '../models/device.dart';
 import '../services/mesh_status_service.dart';
 import 'lulu_ui.dart';
 
-enum _DeviceAction { edit, delete, help }
+enum _DeviceAction { transfer, edit, delete, help }
 
 class DeviceCard extends StatefulWidget {
   const DeviceCard(
@@ -19,6 +19,7 @@ class DeviceCard extends StatefulWidget {
       this.connectLabel,
       this.mobile = false,
       this.busy = false,
+      this.onTransfer,
       this.onEdit,
       this.onDelete,
       this.onDisconnect,
@@ -33,6 +34,7 @@ class DeviceCard extends StatefulWidget {
   final bool busy;
   final VoidCallback onConnect;
   final String? connectLabel;
+  final VoidCallback? onTransfer;
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
   final VoidCallback? onDisconnect;
@@ -50,6 +52,8 @@ class _DeviceCardState extends State<DeviceCard> {
 
   void _runAction(_DeviceAction action) {
     switch (action) {
+      case _DeviceAction.transfer:
+        widget.onTransfer?.call();
       case _DeviceAction.edit:
         widget.onEdit?.call();
       case _DeviceAction.delete:
@@ -89,6 +93,13 @@ class _DeviceCardState extends State<DeviceCard> {
                           ]),
                     ),
                     const Divider(),
+                    if (widget.onTransfer != null)
+                      ListTile(
+                        leading: const Icon(Icons.upload_file_outlined),
+                        title: const Text('发送文件'),
+                        onTap: () =>
+                            Navigator.pop(context, _DeviceAction.transfer),
+                      ),
                     if (widget.onEdit != null)
                       ListTile(
                           leading: const Icon(Icons.edit_outlined),
@@ -165,7 +176,8 @@ class _DeviceCardState extends State<DeviceCard> {
                     textAlign: TextAlign.center)),
           ]),
     );
-    final actions = widget.onEdit != null ||
+    final actions = widget.onTransfer != null ||
+        widget.onEdit != null ||
         widget.onDelete != null ||
         widget.onAndroidHelp != null;
     return MouseRegion(
@@ -203,6 +215,9 @@ class _DeviceCardState extends State<DeviceCard> {
                 icon: const Icon(Icons.more_horiz, size: 19),
                 onSelected: _runAction,
                 itemBuilder: (_) => [
+                  if (widget.onTransfer != null)
+                    const PopupMenuItem(
+                        value: _DeviceAction.transfer, child: Text('发送文件')),
                   if (widget.onEdit != null)
                     const PopupMenuItem(
                         value: _DeviceAction.edit, child: Text('编辑')),

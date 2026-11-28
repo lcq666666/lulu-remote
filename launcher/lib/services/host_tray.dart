@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 
 import '../models/device.dart';
 import 'auto_lock_service.dart';
+import 'file_transfer_host.dart';
 import 'mesh_status_service.dart';
 import 'pairing_worker_client.dart';
 import 'privacy_screen_service.dart';
@@ -50,6 +51,7 @@ class HostTray {
     _timer = null;
     _account = null;
     _autoLock.reset();
+    unawaited(FileTransferHost.instance.stop());
     unawaited(PrivacyScreenService.instance.stop());
     _seen.clear();
     _dismissed.clear();
@@ -88,6 +90,7 @@ class HostTray {
       // The host screen can retry registration if Windows storage is unavailable.
     }
     if (generation != _generation) return;
+    FileTransferHost.instance.start();
     _timer = Timer.periodic(const Duration(seconds: 2), (_) {
       unawaited(_pollSession());
       unawaited(_poll());

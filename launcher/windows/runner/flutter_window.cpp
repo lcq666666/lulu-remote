@@ -1,5 +1,7 @@
 #include "flutter_window.h"
 
+#include <shlobj.h>
+
 #include <shellapi.h>
 #include <wincred.h>
 
@@ -189,6 +191,16 @@ void FlutterWindow::HandleTrayCall(
       ::LockWorkStation();
     }
     result->Success();
+  } else if (method == "knownDesktop") {
+    PWSTR path = nullptr;
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_Desktop, 0, nullptr, &path))) {
+      CoTaskMemFree(path);
+      result->Error("desktop_folder");
+      return;
+    }
+    const auto location = Utf8FromUtf16(path);
+    CoTaskMemFree(path);
+    result->Success(flutter::EncodableValue(location));
   } else if (method == "pickPrivacyImage") {
     PrivacyImageFile image{};
     const auto picked = PickPrivacyImage(GetHandle(), &image);
