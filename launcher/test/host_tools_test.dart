@@ -16,12 +16,19 @@ void main() {
   late List<String> forwarded;
   late bool streaming;
   late List<RemoteCommand> commands;
+  late HostHardware hardwareReport;
 
   setUp(() async {
     clipboard = '来自主机';
     forwarded = [];
     streaming = false;
     commands = [];
+    hardwareReport = const HostHardware(
+        cpu: 'TEST CPU',
+        ramBytes: 17179869184,
+        diskBytes: 107374182400,
+        diskFreeBytes: 53687091200,
+        os: 'Windows TEST');
     final code = newTransferCode();
     server = HostToolsServer(
         code: code,
@@ -32,12 +39,7 @@ void main() {
           commands.add(query);
           return '${query.command} 完成';
         },
-        readHardware: () async => const HostHardware(
-            cpu: 'TEST CPU',
-            ramBytes: 17179869184,
-            diskBytes: 107374182400,
-            diskFreeBytes: 53687091200,
-            os: 'Windows TEST'),
+        readHardware: () async => hardwareReport,
         readClipboard: () async => clipboard,
         writeClipboard: (value) async {
           clipboard = value;
@@ -269,7 +271,7 @@ void main() {
     }
   });
 
-  test('hardware opt-in returns the four expected measurements', () async {
+  test('hardware opt-in reads the legacy system-drive-only response', () async {
     server.diagnosticsEnabled = true;
     await expectLater(client.hardware(), throwsA(isA<HostToolsException>()));
     server.hardwareEnabled = true;
@@ -280,12 +282,88 @@ void main() {
     expect(hardware.summary, contains('Windows TEST'));
   });
 
+  test('hardware shares named fixed drives in system-first order', () async {
+    hardwareReport = const HostHardware(
+        cpu: 'TEST CPU',
+        ramBytes: 17179869184,
+        diskBytes: 107374182400,
+        diskFreeBytes: 53687091200,
+        os: 'Windows TEST',
+        volumes: [
+          HostDiskVolume(
+              drive: 'E:',
+              totalBytes: 214748364800,
+              freeBytes: 161061273600,
+              system: false),
+          HostDiskVolume(
+              drive: 'C:',
+              totalBytes: 107374182400,
+              freeBytes: 53687091200,
+              system: true),
+          HostDiskVolume(
+              drive: 'D:',
+              totalBytes: 429496729600,
+              freeBytes: 214748364800,
+              system: false),
+        ]);
+    server.hardwareEnabled = true;
+    final hardware = await client.hardware();
+    expect(hardware.volumes.map((volume) => volume.drive), ['C:', 'D:', 'E:']);
+    expect(hardware.summary, contains('系统盘 C:  50.0 GiB 可用 / 100.0 GiB'));
+    expect(hardware.summary, contains('本地盘 D:  200.0 GiB 可用 / 400.0 GiB'));
+    expect(hardware.diskBytes, 107374182400);
+    expect(hardware.diskFreeBytes, 53687091200);
+  });
+
+  test('hardware rejects invalid drive names, capacities and system drives',
+      () {
+    final legacy = hardwareReport.toJson();
+    final primary = {
+      'drive': 'C:',
+      'totalBytes': legacy['diskBytes'],
+      'freeBytes': legacy['diskFreeBytes'],
+      'system': true,
+    };
+    for (final rows in [
+      [
+        primary,
+        {...primary, 'system': false}
+      ],
+      [
+        {...primary, 'drive': r'D:\extra'}
+      ],
+      [
+        {...primary, 'system': false}
+      ],
+      [
+        primary,
+        {...primary, 'drive': 'D:'}
+      ],
+      [
+        {...primary, 'totalBytes': 1}
+      ],
+      [
+        {...primary, 'totalBytes': 200000000000}
+      ],
+    ]) {
+      expect(() => HostHardware.fromJson({...legacy, 'volumes': rows}),
+          throwsFormatException);
+    }
+  });
+
   test('reads the real local Windows CIM snapshot', () async {
     final hardware = await HostHardware.readWindows();
     expect(hardware.cpu, isNotEmpty);
     expect(hardware.os, contains('Windows'));
     expect(hardware.ramBytes, greaterThan(0));
     expect(hardware.diskBytes, greaterThanOrEqualTo(hardware.diskFreeBytes));
+    expect(hardware.volumes, isNotEmpty);
+    final systemVolume = hardware.volumes.first;
+    expect(systemVolume.system, isTrue);
+    expect(
+        systemVolume.drive, Platform.environment['SystemDrive']?.toUpperCase());
+    expect(systemVolume.totalBytes, hardware.diskBytes);
+    expect(hardware.volumes.where((volume) => volume.system), hasLength(1));
   }, skip: !Platform.isWindows);
 }
 
