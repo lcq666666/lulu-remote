@@ -102,19 +102,22 @@ jobs:
           python3 - <<'PY'
           import base64, ipaddress, os, pathlib, re, urllib.parse
           release = os.environ['GITHUB_REF'].startswith('refs/tags/v')
-          prefix = 'RELEASE' if release else 'PREVIEW'
+          release_candidate = release and '-rc.' in os.environ['GITHUB_REF_NAME']
+          prefix = 'RELEASE' if release and not release_candidate else 'PREVIEW'
           key = os.environ[prefix + '_PUBLIC_KEY']
-          url = os.environ[prefix + '_SERVER_URL']
-          if not re.fullmatch(r'https?://[0-9.]+:[0-9]+/?', url):
-              raise SystemExit('Set the activation group URL to an IPv4 address with an explicit port.')
-          address = urllib.parse.urlsplit(url)
           if not re.fullmatch(r'[A-Za-z0-9_-]{43}', key) or len(base64.urlsafe_b64decode(key+'=')) != 32:
-              raise SystemExit('Set LULU_ACTIVATION_PUBLIC_KEY to the output of lulu-auth init.')
-          ip = ipaddress.IPv4Address(address.hostname or '')
-          if (address.scheme not in ('http', 'https') or not address.port or address.username is not None
-              or address.path not in ('', '/') or address.query or address.fragment
-              or not any(ip in ipaddress.IPv4Network(net) for net in ('100.64.0.0/10', '10.0.0.0/8'))):
-              raise SystemExit('Set LULU_ACTIVATION_SERVER to the overlay IPv4 HTTP URL, including its port.')
+              raise SystemExit(f'Set the {prefix.lower()} activation public key to the output of lulu-auth init.')
+          # Public RC packages leave the private preview endpoint to the tester.
+          url = '' if release_candidate else os.environ[prefix + '_SERVER_URL']
+          if not release_candidate:
+              if not re.fullmatch(r'https?://[0-9.]+:[0-9]+/?', url):
+                  raise SystemExit('Set the activation group URL to an IPv4 address with an explicit port.')
+              address = urllib.parse.urlsplit(url)
+              ip = ipaddress.IPv4Address(address.hostname or '')
+              if (address.scheme not in ('http', 'https') or not address.port or address.username is not None
+                  or address.path not in ('', '/') or address.query or address.fragment
+                  or not any(ip in ipaddress.IPv4Network(net) for net in ('100.64.0.0/10', '10.0.0.0/8'))):
+                  raise SystemExit('Set LULU_ACTIVATION_SERVER to the overlay IPv4 HTTP URL, including its port.')
           pubspec = pathlib.Path('launcher/pubspec.yaml').read_text(encoding='utf-8')
           match = re.search(r'^version: ([0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.]+)?)\+\d+$', pubspec, re.M)
           if not match or (release and os.environ['GITHUB_REF_NAME'] != 'v' + match[1]):
@@ -363,13 +366,14 @@ jobs:
             ### 在线激活
 
             本版首次联网激活需要作者发放的一次性密钥。激活后，已激活设备仍可离线启动。
+            ${{ contains(github.ref_name, '-rc.') && '此预发布版用于阶段 A 真机验收。先加入作者的组网，在激活页填入作者提供的预览服务组网地址。每台设备使用各自的一次性验收密钥。' || '' }}
             作者在激活服务器上运行 `lulu-auth-*-windows-x64.exe init` 初始化，运行 `serve --listen 组网IP:8765` 启动服务。使用 `lulu-keygen-*-windows-x64.exe keys generate --count 20 --note 实验室` 生成密钥。部署与备份见 `server/README.md`。
 
             ### Windows 连接修复
 
             - 直接从 LULU 的设备卡进入桌面。首次配对会用已保存的地址打开 Moonlight 的 PIN 窗口，无需到 Moonlight 首页重新添加或输入地址。
             - LULU 先检查随包和系统安装的 Moonlight 是否能运行，必要时在应用内准备组件。设备卡显示连接端口或组网相关的错误原因。
-            - F01 提供被控端串流隐私屏和本机预览。F02 提供远程结束后自动锁屏开关，已通过双机验收。
+            - F01 提供被控端串流隐私屏和本机预览。F02 提供远程结束后自动锁屏开关。
 
             两台电脑都可以用 `LULU-Remote-Setup-*.exe` 覆盖同类型安装。安装前先从托盘退出正在运行的 LULU。用 `LULU-Host-Setup-*.exe` 部署专用主机时，会配置登录后自动运行托盘。便携 ZIP 需解压整个文件夹，再打开 `lulu_remote.exe`。
 
