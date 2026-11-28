@@ -21,6 +21,8 @@ class Device {
     this.lastSeen,
     this.wakeMac,
     this.wakeRelayAddress,
+    this.group = '',
+    this.nickname = '',
   });
 
   factory Device.fromJson(Map<String, dynamic> json) => Device(
@@ -39,6 +41,8 @@ class Device {
         paired: json['paired'] as bool? ?? false,
         wakeMac: json['wakeMac'] as String?,
         wakeRelayAddress: json['wakeRelayAddress'] as String?,
+        group: (json['group'] as String? ?? '').trim(),
+        nickname: (json['nickname'] as String? ?? '').trim(),
         lastSeen: json['lastSeen'] == null
             ? null
             : DateTime.tryParse(json['lastSeen'] as String),
@@ -68,6 +72,10 @@ class Device {
 
   final String? wakeMac;
   final String? wakeRelayAddress;
+  final String group;
+  final String nickname;
+
+  String get displayName => nickname.isEmpty ? name : nickname;
 
   bool paired;
   DateTime? lastSeen;
@@ -95,6 +103,8 @@ class Device {
         'paired': paired,
         if (wakeMac != null) 'wakeMac': wakeMac,
         if (wakeRelayAddress != null) 'wakeRelayAddress': wakeRelayAddress,
+        if (group.isNotEmpty) 'group': group,
+        if (nickname.isNotEmpty) 'nickname': nickname,
         'lastSeen': lastSeen?.toIso8601String(),
       };
 
@@ -112,7 +122,18 @@ class Device {
         lastSeen: lastSeen,
         wakeMac: wakeMac,
         wakeRelayAddress: wakeRelayAddress,
+        group: group,
+        nickname: nickname,
       );
+}
+
+/// Groups saved devices without filtering inactive ones or changing list order.
+Map<String, List<Device>> groupDevices(Iterable<Device> devices) {
+  final groups = <String, List<Device>>{};
+  for (final device in devices) {
+    (groups[device.group] ??= []).add(device);
+  }
+  return groups;
 }
 
 enum NetworkKind {

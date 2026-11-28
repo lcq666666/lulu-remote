@@ -33,6 +33,10 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
       TextEditingController(text: widget.device?.wakeMac);
   late final _wakeRelayController =
       TextEditingController(text: widget.device?.wakeRelayAddress);
+  late final _groupController =
+      TextEditingController(text: widget.device?.group);
+  late final _nicknameController =
+      TextEditingController(text: widget.device?.nickname);
   late NetworkKind _network = widget.device?.network ?? NetworkKind.tailscale;
   String? _error;
 
@@ -114,6 +118,8 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
         hostUuid: sameHost ? existing.hostUuid : null,
         wakeMac: wakeMac,
         wakeRelayAddress: relay.isEmpty ? null : relay,
+        group: _groupController.text.trim(),
+        nickname: _nicknameController.text.trim(),
         lastSeen: sameHost ? existing.lastSeen : null,
       ),
     );
@@ -128,6 +134,8 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
     _appController.dispose();
     _wakeMacController.dispose();
     _wakeRelayController.dispose();
+    _groupController.dispose();
+    _nicknameController.dispose();
     super.dispose();
   }
 
@@ -160,6 +168,22 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
           enabled: !_saving,
           decoration: const InputDecoration(
               labelText: '电脑名称（选填）', hintText: '例如：实验室主机'),
+        ),
+        const SizedBox(height: 16),
+        TextField(
+          controller: _nicknameController,
+          enabled: !_saving,
+          maxLength: 40,
+          decoration:
+              const InputDecoration(labelText: '显示备注名（选填）', counterText: ''),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _groupController,
+          enabled: !_saving,
+          maxLength: 40,
+          decoration: const InputDecoration(
+              labelText: '分组（选填）', hintText: '例如：课题组', counterText: ''),
         ),
         const SizedBox(height: 16),
         LayoutBuilder(builder: (context, constraints) {

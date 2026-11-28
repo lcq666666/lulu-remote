@@ -97,7 +97,7 @@ class _DeviceCardState extends State<DeviceCard> {
                       child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(widget.device.name,
+                            Text(widget.device.displayName,
                                 style: const TextStyle(
                                     fontSize: 16, fontWeight: FontWeight.w600)),
                             Text(_address,
@@ -158,6 +158,8 @@ class _DeviceCardState extends State<DeviceCard> {
     final error = Theme.of(context).colorScheme.error;
     final mobile = widget.mobile;
     final online = widget.status == HostStatus.online;
+    final offline = widget.status == HostStatus.offline ||
+        widget.status == HostStatus.unreachable;
     final busy = widget.busy || widget.connecting || widget.waking;
     final canWake = widget.onWake != null && widget.status != null && !online;
     final responseTime = widget.responseTime;
@@ -223,10 +225,11 @@ class _DeviceCardState extends State<DeviceCard> {
             Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           Row(children: [
             Expanded(
-                child: Text(widget.device.name,
+                child: Text(widget.device.displayName,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
+                        color: offline ? theme.muted : null,
                         fontSize: mobile ? 17 : 16,
                         fontWeight: FontWeight.w600))),
             if (mobile)
