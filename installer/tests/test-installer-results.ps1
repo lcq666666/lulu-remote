@@ -45,8 +45,17 @@ foreach ($scenario in @(
 }
 
 if ($TestClientInstaller) {
-    $version = & (Join-Path $installer 'scripts/read-app-version.ps1')
+    $readVersion = Join-Path $installer 'scripts/read-app-version.ps1'
+    $fullVersion = & $readVersion -IncludeBuild
+    $version = ($fullVersion -split '\+')[0]
     $client = Join-Path $installer "dist/LULU-Remote-Setup-$version.exe"
+    $hostInstaller = Join-Path $installer "dist/LULU-Host-Setup-$version.exe"
+    foreach ($package in @($client, $hostInstaller)) {
+        $packageVersion = (Get-Item -LiteralPath $package).VersionInfo.ProductVersion.Trim()
+        if ($packageVersion -cne $version) {
+            throw "Installer product version '$packageVersion' does not match '$version': $package"
+        }
+    }
     $target = Join-Path $workspace 'client-installed'
     for ($iteration = 1; $iteration -le 2; $iteration++) {
         $log = Join-Path $workspace "client-$iteration.log"
@@ -60,8 +69,8 @@ if ($TestClientInstaller) {
             }
         }
         $launcherVersion = (Get-Item -LiteralPath (Join-Path $target 'lulu_remote.exe')).VersionInfo.ProductVersion
-        if (($launcherVersion -split '\+')[0] -ne $version) {
-            throw "Installed launcher version $launcherVersion does not match $version. See $log"
+        if ($launcherVersion -cne $fullVersion) {
+            throw "Installed launcher version $launcherVersion does not match $fullVersion. See $log"
         }
         Write-Host "Client installer pass $iteration verified version $launcherVersion and bundled Moonlight."
     }
