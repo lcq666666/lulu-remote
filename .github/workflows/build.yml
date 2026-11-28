@@ -25,6 +25,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      activation_preview:
+        description: Build packages with the private preview activation configuration
+        type: boolean
+        default: false
 
 permissions:
   contents: write # needed by the release job to attach assets
@@ -84,7 +89,10 @@ jobs:
           LULU_AUTH_TEST_EXE="$RUNNER_TEMP/lulu-auth-test" flutter test test/activation_integration_test.dart
       - name: Check activation package configuration
         id: activation
-        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.LULU_ACTIVATION_PREVIEW_PUBLIC_KEY != '')
+        if: >-
+          startsWith(github.ref, 'refs/tags/v') ||
+          (github.event_name == 'workflow_dispatch' && inputs.activation_preview) ||
+          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.LULU_ACTIVATION_PREVIEW_PUBLIC_KEY != '')
         env:
           RELEASE_PUBLIC_KEY: ${{ vars.LULU_ACTIVATION_PUBLIC_KEY }}
           RELEASE_SERVER_URL: ${{ vars.LULU_ACTIVATION_SERVER }}

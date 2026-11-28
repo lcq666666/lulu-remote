@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../app.dart';
@@ -728,9 +729,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               mobile: !windows,
                               busy: _busy,
                               onConnect: () => _connect(device),
-                              connectLabel: Platform.isAndroid
-                                  ? '连接 Moonlight'
-                                  : null,
+                              connectLabel:
+                                  Platform.isAndroid ? '连接 Moonlight' : null,
                               onEdit: () => _openAddDevice(device),
                               onDelete: () => _deleteDevice(device),
                               onDisconnect: windows && device.paired

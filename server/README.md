@@ -14,7 +14,7 @@ $listen = '100.64.10.20:8765'
 & $auth --data-dir $data serve --listen $listen
 ```
 
-`init` 输出公钥，重复运行使用原来的公钥。把输出写入 GitHub 仓库的 `LULU_ACTIVATION_PUBLIC_KEY` Actions 变量。把完整的组网 URL 写入 `LULU_ACTIVATION_SERVER`，例如 `http://100.64.10.20:8765`。打标签时 CI 会将这两个值编进 Windows 与 Android 启动器，配置缺失会停止发布。日常 PR 构建保留调试入口。为同仓库 PR 制作真机验收包时，可分别配置 `LULU_ACTIVATION_PREVIEW_PUBLIC_KEY` 和 `LULU_ACTIVATION_PREVIEW_SERVER`，用独立的数据目录、签名私钥和服务器运行验收服务。需要本地测试激活门时，用 `flutter build windows --release` 或 `flutter build apk` 并传入三个参数：`--dart-define=LULU_ACTIVATION_REQUIRED=true`、`--dart-define=LULU_ACTIVATION_PUBLIC_KEY=<公钥>`、`--dart-define=LULU_ACTIVATION_SERVER=<组网 URL>`。
+`init` 输出公钥，重复运行使用原来的公钥。把输出写入 GitHub 仓库的 `LULU_ACTIVATION_PUBLIC_KEY` Actions 变量。把完整的组网 URL 写入 `LULU_ACTIVATION_SERVER`，例如 `http://100.64.10.20:8765`。打标签时 CI 会将这两个值编进 Windows 与 Android 启动器，配置缺失会停止发布。日常 PR 构建保留调试入口。为同仓库 PR 或手动运行工作流（勾选 `activation_preview`）制作真机验收包时，可分别配置 `LULU_ACTIVATION_PREVIEW_PUBLIC_KEY` 和 `LULU_ACTIVATION_PREVIEW_SERVER`，用独立的数据目录、签名私钥和服务器运行验收服务。需要本地测试激活门时，用 `flutter build windows --release` 或 `flutter build apk` 并传入三个参数：`--dart-define=LULU_ACTIVATION_REQUIRED=true`、`--dart-define=LULU_ACTIVATION_PUBLIC_KEY=<公钥>`、`--dart-define=LULU_ACTIVATION_SERVER=<组网 URL>`。
 
 在 Windows 任务计划程序里创建任务，程序填 `$auth` 对应的完整路径，参数填 `--data-dir "<数据目录>" serve --listen <组网IP>:8765`。选择初始化时用的同一 Windows 帐号，任务触发器设为「启动时」，延迟 1 分钟，失败后每 1 分钟重试。需要防火墙规则时，只允许组网客户端访问指定 IPv4 地址与 TCP 端口。可用 `GET /v1/status` 从组网内检查服务是否启动。HTTP 部署依赖受信任的加密组网以及组网成员访问限制。
 
