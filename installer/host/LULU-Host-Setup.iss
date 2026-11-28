@@ -70,31 +70,12 @@ Name: "{group}\Sunshine"; Filename: "{autopf}\Sunshine\sunshine.exe"
 Name: "{group}\{cm:UninstallProgram,强哥远程主机}"; Filename: "{uninstallexe}"
 
 [Code]
-procedure RunHostStep(const FileName, Params, Step: String; AllowRestart: Boolean);
-var
-  ResultCode: Integer;
-begin
-  if not Exec(FileName, Params, ExpandConstant('{app}'), SW_HIDE,
-      ewWaitUntilTerminated, ResultCode) then
-    RaiseException(Step + ' could not start. Windows error ' + IntToStr(ResultCode) + '.');
-  if (ResultCode <> 0) and not (AllowRestart and (ResultCode = 3010)) then
-    RaiseException(Step + ' failed. Exit code ' + IntToStr(ResultCode) + '.');
-end;
+#include "host-component-checks.iss"
 
-procedure CurStepChanged(CurStep: TSetupStep);
-var
-  PowerShell: String;
+function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
-  if CurStep <> ssPostInstall then Exit;
-  PowerShell := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
-  if not FileExists(ExpandConstant('{autopf}\Sunshine\sunshine.exe')) then
-    RunHostStep(ExpandConstant('{sys}\msiexec.exe'),
-      '/i "' + ExpandConstant('{app}\vendor\Sunshine-Windows-AMD64-installer.msi') + '" /qn /norestart',
-      'Sunshine installation', True);
-  RunHostStep(PowerShell, '-NoProfile -ExecutionPolicy Bypass -File "' +
-      ExpandConstant('{app}\vendor\install-tailscale.ps1') + '"', 'Tailscale installation', False);
-  RunHostStep(PowerShell, '-NoProfile -ExecutionPolicy Bypass -File "' +
-    ExpandConstant('{app}\vendor\finalize-host.ps1') + '"', 'Sunshine startup and readiness check', False);
+  Result := PrepareHostComponents(
+    not FileExists(ExpandConstant('{autopf}\Sunshine\sunshine.exe')), NeedsRestart);
 end;
 
 [Run]
