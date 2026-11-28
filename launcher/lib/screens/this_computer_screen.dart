@@ -9,6 +9,7 @@ import '../app.dart';
 import '../services/component_installer.dart';
 import '../services/host_tray.dart';
 import '../services/mesh_status_service.dart';
+import '../services/tray_startup.dart';
 import '../widgets/auto_lock_tile.dart';
 import '../widgets/lulu_ui.dart';
 import '../widgets/privacy_screen_settings.dart';
@@ -24,8 +25,7 @@ class ThisComputerScreen extends StatefulWidget {
 }
 
 class _ThisComputerScreenState extends State<ThisComputerScreen> {
-  static const _runKey = r'HKCU\Software\Microsoft\Windows\CurrentVersion\Run';
-  static const _runName = 'LULU Remote';
+  final _startup = const TrayStartup();
   final _network = MeshStatusService();
   bool _available = false;
   bool _autoStart = false;
@@ -74,21 +74,13 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
   Future<void> _refresh() async {
     final addresses = await _network.localAddresses();
     final hostFailure = await _readHostFailure();
-    final startup =
-        await Process.run('reg.exe', ['query', _runKey, '/v', _runName]);
-    final installedStartup = await Process.run('reg.exe', [
-      'query',
-      r'HKLM\Software\Microsoft\Windows\CurrentVersion\Run',
-      '/v',
-      'LULU Remote Host',
-      '/reg:64',
-    ]);
+    final startup = await _startup.read();
     if (!mounted) return;
     setState(() {
-      _installedStartup = installedStartup.exitCode == 0;
+      _installedStartup = startup.host;
       _available = hostFailure == null;
       _hostFailure = hostFailure;
-      _autoStart = startup.exitCode == 0;
+      _autoStart = startup.user;
       _addresses = addresses;
     });
   }
@@ -116,20 +108,7 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
   }
 
   Future<void> _setAutoStart(bool enabled) async {
-    final result = await Process.run('reg.exe', [
-      enabled ? 'add' : 'delete',
-      _runKey,
-      '/v',
-      _runName,
-      if (enabled) ...[
-        '/t',
-        'REG_SZ',
-        '/d',
-        '"${Platform.resolvedExecutable}" --tray'
-      ],
-      '/f',
-    ]);
-    if (result.exitCode != 0) throw StateError('无法保存开机启动设置。');
+    await _startup.setUserEnabled(enabled, Platform.resolvedExecutable);
     if (mounted) setState(() => _autoStart = enabled);
   }
 
@@ -303,9 +282,10 @@ class _ThisComputerScreenState extends State<ThisComputerScreen> {
         children: [
           const Divider(),
           SwitchListTile(
-            title: const Text('开机启动 LULU'),
-            subtitle: Text(
-                _installedStartup ? '主机安装器已开启托盘启动' : '登录 Windows 后在托盘等待配对'),
+            title: const Text('登录 Windows 后启动托盘'),
+            subtitle: Text(_installedStartup
+                ? '已找到主机安装器配置的托盘启动项。实际启动由 Windows 管理。'
+                : '登录后在托盘等待配对。若没有启动，请检查 Windows 的「启动应用」。'),
             value: _autoStart || _installedStartup,
             onChanged: _busy || _installedStartup
                 ? null
