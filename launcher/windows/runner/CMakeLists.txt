@@ -22,7 +22,14 @@ add_executable(${BINARY_NAME} WIN32
 # that need different build settings.
 apply_standard_settings(${BINARY_NAME})
 
-# Add preprocessor definitions for the build version.
+# The Flutter tool exports these values from pubspec.yaml. A direct build
+# without them must fail instead of silently stamping the wrong version.
+foreach(version_part IN ITEMS FLUTTER_VERSION FLUTTER_VERSION_MAJOR
+        FLUTTER_VERSION_MINOR FLUTTER_VERSION_PATCH FLUTTER_VERSION_BUILD)
+  if("${${version_part}}" STREQUAL "")
+    message(FATAL_ERROR "Missing ${version_part}. Build with flutter build windows.")
+  endif()
+endforeach()
 target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION=\"${FLUTTER_VERSION}\"")
 target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION_MAJOR=${FLUTTER_VERSION_MAJOR}")
 target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION_MINOR=${FLUTTER_VERSION_MINOR}")
