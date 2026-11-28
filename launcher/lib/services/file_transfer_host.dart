@@ -198,11 +198,13 @@ class FileTransferHost {
   Future<void> saveApprovedWindowsCommand(ApprovedWindowsCommand? command) =>
       _secureStore.writeApprovedWindowsCommand(command?.encode());
 
-  Future<String> _executeWindowsCommand(RemoteCommand query) async {
-    final server = _tools;
+  Future<String> _executeWindowsCommand(
+      RemoteCommand query, bool Function() stillAllowed) async {
     final preset =
         query == RemoteCommand.approved ? await approvedWindowsCommand() : null;
-    if (!identical(_tools, server) || server?.commandsEnabled != true) {
+    // A toggle or code rotation can revoke the request while secure storage
+    // is being read. Check again before starting the approved executable.
+    if (!stillAllowed()) {
       return '被控端已关闭远程命令。';
     }
     return RemoteCommand.runOnWindows(query, approved: preset);

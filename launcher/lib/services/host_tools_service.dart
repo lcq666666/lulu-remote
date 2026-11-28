@@ -59,6 +59,11 @@ Future<List<int>> _open(
       aad: _aad(phase, binding));
 }
 
+// A handler that awaits local preparation must recheck the grant before
+// starting the command. Revocation cannot undo a process already started.
+typedef RunAllowedCommand = Future<String> Function(
+    RemoteCommand command, bool Function() stillAllowed);
+
 class HostToolsServer {
   HostToolsServer(
       {required this.code,
@@ -74,7 +79,7 @@ class HostToolsServer {
   final Future<String> Function() readClipboard;
   final Future<void> Function(String) writeClipboard;
   final Future<String> Function()? readDiagnostics;
-  final Future<String> Function(RemoteCommand)? runCommand;
+  final RunAllowedCommand? runCommand;
   final Future<HostHardware> Function()? readHardware;
   final Future<void> Function(String)? sendWake;
   Set<String> wakeTargets = const {};
@@ -83,9 +88,17 @@ class HostToolsServer {
   bool clipboardSyncEnabled = false;
   bool hardwareEnabled = false;
   bool diagnosticsEnabled = false;
-  bool commandsEnabled = false;
+  bool _commandsEnabled = false;
+  int _commandGeneration = 0;
+  bool get commandsEnabled => _commandsEnabled;
+  set commandsEnabled(bool enabled) {
+    if (enabled == _commandsEnabled) return;
+    _commandsEnabled = enabled;
+    _commandGeneration++;
+  }
+
   bool active = true;
-  final _issued = <String, Duration>{};
+  final _issued = <String, ({Duration expiry, int commandGeneration})>{};
   final _usedHellos = <String, Duration>{};
   final _clock = Stopwatch()..start();
   int _pending = 0;
@@ -110,6 +123,9 @@ class HostToolsServer {
         _ => false,
       };
 
+  bool _commandIsCurrent(int generation) =>
+      active && _commandsEnabled && generation == _commandGeneration;
+
   static bool handles(String path) => path.startsWith(_path);
 
   Future<void> handle(HttpRequest request) async {
@@ -120,6 +136,8 @@ class HostToolsServer {
     var counted = false;
     try {
       final operation = request.uri.path.substring(_path.length);
+      final generationAtArrival = _commandGeneration;
+      int? authorizedCommandGeneration;
       if (!_allows(operation)) {
         response.statusCode = HttpStatus.forbidden;
         return;
@@ -166,7 +184,7 @@ class HostToolsServer {
         return;
       }
       final now = _clock.elapsed;
-      _issued.removeWhere((_, expiry) => expiry <= now);
+      _issued.removeWhere((_, grant) => grant.expiry <= now);
       _usedHellos.removeWhere((_, expiry) => expiry <= now);
       final List<int> result;
       if (operation == 'challenge') {
@@ -178,10 +196,14 @@ class HostToolsServer {
         }
         final challenge = newTransferCode();
         _usedHellos[id] = now + _challengeLife;
-        _issued[challenge] = now + _challengeLife;
+        _issued[challenge] = (
+          expiry: now + _challengeLife,
+          commandGeneration: generationAtArrival,
+        );
         result = utf8.encode(challenge);
       } else {
-        if (_issued.remove(id) == null) {
+        final grant = _issued.remove(id);
+        if (grant == null) {
           response.statusCode = HttpStatus.unauthorized;
           return;
         }
@@ -191,6 +213,12 @@ class HostToolsServer {
         } else if (operation == 'diagnostics') {
           result = utf8.encode(await readDiagnostics!().timeout(_timeout));
         } else if (operation == 'command') {
+          final authorized = grant.commandGeneration;
+          if (!_commandIsCurrent(authorized)) {
+            response.statusCode = HttpStatus.forbidden;
+            return;
+          }
+          authorizedCommandGeneration = authorized;
           final query = RemoteCommand.parse(utf8.decode(plaintext));
           if (query == null) {
             response.statusCode = HttpStatus.badRequest;
@@ -202,7 +230,8 @@ class HostToolsServer {
           }
           _commandRunning = true;
           try {
-            result = utf8.encode(await runCommand!(query));
+            result = utf8.encode(
+                await runCommand!(query, () => _commandIsCurrent(authorized)));
           } finally {
             _commandRunning = false;
           }
@@ -247,7 +276,9 @@ class HostToolsServer {
         }
       }
       final sealed = await _seal(code, 'response', binding, result);
-      if (!_allows(operation)) {
+      if (!_allows(operation) ||
+          (authorizedCommandGeneration != null &&
+              !_commandIsCurrent(authorizedCommandGeneration))) {
         response.statusCode = HttpStatus.forbidden;
         return;
       }

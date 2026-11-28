@@ -35,7 +35,8 @@ void main() {
         streaming: () => streaming,
         sendWake: (mac) async => forwarded.add(mac),
         readDiagnostics: () async => '电脑名称：TEST-PC',
-        runCommand: (query) async {
+        runCommand: (query, stillAllowed) async {
+          expect(stillAllowed(), isTrue);
           commands.add(query);
           return '${query.command} 完成';
         },
@@ -67,6 +68,67 @@ void main() {
     await expectLater(
         client.command(RemoteCommand.user), throwsA(isA<HostToolsException>()));
     expect(commands, [RemoteCommand.version]);
+  });
+
+  test('a command grant is revoked after the host turns the feature off',
+      () async {
+    final endpoint = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => endpoint.close(force: true));
+    final arrived = Completer<void>();
+    final resume = Completer<void>();
+    var pause = true;
+    endpoint.listen((request) async {
+      if (pause && request.uri.pathSegments.last == 'command') {
+        pause = false;
+        arrived.complete();
+        await resume.future;
+      }
+      await server.handle(request);
+    });
+    final testClient =
+        HostToolsClient('127.0.0.1', server.code, port: endpoint.port);
+    server.commandsEnabled = true;
+    final rejected = expectLater(testClient.command(RemoteCommand.hostname),
+        throwsA(isA<HostToolsException>()));
+    await arrived.future;
+    server.commandsEnabled = false;
+    server.commandsEnabled = true;
+    resume.complete();
+    await rejected;
+    expect(commands, isEmpty);
+    await testClient.command(RemoteCommand.version);
+    expect(commands, [RemoteCommand.version]);
+  });
+
+  test('revocation is visible during command preparation', () async {
+    final preparing = Completer<void>();
+    final ready = Completer<void>();
+    var started = false;
+    final service = HostToolsServer(
+      code: server.code,
+      readClipboard: () async => '',
+      writeClipboard: (_) async {},
+      runCommand: (query, stillAllowed) async {
+        expect(stillAllowed(), isTrue);
+        preparing.complete();
+        await ready.future;
+        started = stillAllowed();
+        return 'test result';
+      },
+    )..commandsEnabled = true;
+    final endpoint = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => endpoint.close(force: true));
+    endpoint.listen(service.handle);
+    final testClient =
+        HostToolsClient('127.0.0.1', service.code, port: endpoint.port);
+    final rejected = expectLater(testClient.command(RemoteCommand.approved),
+        throwsA(isA<HostToolsException>()));
+    await preparing.future;
+    service.commandsEnabled = false;
+    service.commandsEnabled = true;
+    ready.complete();
+    await rejected;
+    expect(started, isFalse);
   });
 
   test('command parser accepts only fixed query names', () {
@@ -110,7 +172,7 @@ void main() {
       code: server.code,
       readClipboard: () async => '',
       writeClipboard: (_) async {},
-      runCommand: (query) =>
+      runCommand: (query, _) =>
           RemoteCommand.runOnWindows(query, approved: preset),
     );
     final endpoint = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
