@@ -305,6 +305,11 @@ jobs:
           }
           verify_package android-dist/LULU-Remote-*.apk com.lulu.remote
           verify_package android-dist/LULU-Pairing-Worker-*.apk com.lulu.remote.pairing
+      - name: Verify Android backup policy in the launcher APK
+        run: |
+          aapt2="$(find "$ANDROID_HOME/build-tools" -name aapt2 | sort -V | tail -n 1)"
+          python3 launcher/test/native/test_android_backup_policy.py
+          python3 launcher/test/native/test_android_backup_policy.py --apk "$aapt2" android-dist/LULU-Remote-*.apk
       - name: Verify matching Android signatures
         run: |
           apksigner="$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)"
