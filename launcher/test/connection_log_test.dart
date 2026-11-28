@@ -1,0 +1,304 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:lulu_remote/services/connection_log.dart';
+import 'package:lulu_remote/services/sunshine_stream_log.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+void main() {
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  test('one completed stream produces one entry with matching timestamps',
+      () async {
+    final started = DateTime.utc(2026, 11, 28, 1, 10);
+    var clock = started;
+    final log = ConnectionLog(now: () => clock);
+    await log.sessionSample(false);
+    await log.sessionSample(true);
+    clock = started.add(const Duration(seconds: 30));
+    await log.sessionSample(null);
+    await log.sessionSample(true);
+    expect(await log.read(), isEmpty);
+    clock = started.add(const Duration(minutes: 2));
+    await log.sessionSample(false);
+    await log.sessionSample(false);
+    final record = (await ConnectionLog().read()).single;
+    expect(record.start, started);
+    expect(record.end, clock);
+    expect(record.duration, const Duration(minutes: 2));
+    expect(record.kind, ConnectionKind.streaming);
+    expect(record.outcome, ConnectionOutcome.completed);
+  });
+
+  test('turning off recording discards in-flight work and survives restart',
+      () async {
+    final evidence = Completer<SunshineStreamEvidence?>();
+    final log = ConnectionLog(streamEvidence: (_, __) => evidence.future);
+    log.pairingSeen('old', 'existing record');
+    await log.pairingCompleted('old');
+    await log.sessionSample(true);
+    final write = log.sessionSample(false);
+    log.pairingSeen('pending', 'not recorded');
+    await log.setRecordingEnabled(false);
+    evidence.complete(null);
+    await write;
+    await log.pairingCompleted('pending');
+
+    final restarted = ConnectionLog();
+    await restarted.loadRecordingSetting();
+    expect(await restarted.recordingEnabled(), isFalse);
+    await restarted.sessionSample(true);
+    await restarted.sessionSample(false);
+    expect((await restarted.read()).single.client, 'existing record');
+    await restarted.setRecordingEnabled(true);
+    restarted.pairingSeen('new', 'new record');
+    await restarted.pairingCompleted('new');
+    expect(await restarted.read(), hasLength(2));
+  });
+
+  test('recovers a failure between idle samples only once', () async {
+    final started = DateTime(2026, 11, 28, 12);
+    var clock = started;
+    final launches = <(DateTime, DateTime, DateTime)>[];
+    final log = ConnectionLog(
+      now: () => clock,
+      idleSessions: (since, after, through) async {
+        launches.add((since, after, through));
+        return SunshineStreamLog.parseIdleSessions(
+          '[2026-11-28 12:00:01.100]: Info: New streaming session started [active sessions: 1]\n'
+          '[2026-11-28 12:00:01.200]: Error: Failed to start a streaming session\n',
+          since,
+          after,
+          through,
+        );
+      },
+    );
+    await log.sessionSample(false);
+    for (final seconds in [2, 4, 8, 12]) {
+      clock = started.add(Duration(seconds: seconds));
+      await log.sessionSample(false);
+    }
+    expect(launches, hasLength(3));
+    expect(launches[1].$2, started.add(const Duration(seconds: 4)));
+    final failure = (await log.read()).single;
+    expect(failure.duration, const Duration(milliseconds: 100));
+    expect(failure.issue, ConnectionIssue.streamLaunch);
+    expect(failure.outcome, ConnectionOutcome.failed);
+    expect(failure.client, isEmpty);
+  });
+
+  test('logs a short stream even if the live poll never sees it', () async {
+    final start = DateTime(2026, 11, 28, 12);
+    var clock = start;
+    const peer = '100.64.12.1';
+    final log = ConnectionLog(
+      now: () => clock,
+      idleSessions: (since, after, through) async =>
+          SunshineStreamLog.parseIdleSessions('''
+[2026-11-28 12:00:00.500]: Info: New streaming session started [active sessions: 1]
+[2026-11-28 12:00:00.750]: Debug: Control peer address [$peer:60421]
+[2026-11-28 12:00:00.800]: Info: CLIENT CONNECTED
+[2026-11-28 12:00:01.100]: Info: CLIENT DISCONNECTED
+''', since, after, through),
+      peerName: (address) async {
+        expect(address.address, peer);
+        return 'lab-pc';
+      },
+    );
+    for (final seconds in [0, 2, 4, 6, 8]) {
+      clock = start.add(Duration(seconds: seconds));
+      await log.sessionSample(false);
+    }
+    final row = (await log.read()).single;
+    expect(row.outcome, ConnectionOutcome.completed);
+    expect(row.client, 'lab-pc');
+    expect(row.duration, const Duration(milliseconds: 300));
+    expect(ConnectionLog.exportText([row]), isNot(contains(peer)));
+    expect(row.toJson().values, isNot(contains(peer)));
+  });
+
+  test('discards an idle scan if a stream becomes active before it returns',
+      () async {
+    final started = DateTime.utc(2026, 11, 28, 12);
+    var clock = started;
+    final inFlight = Completer<List<SunshineStreamEvidence>>();
+    final log = ConnectionLog(
+      now: () => clock,
+      idleSessions: (_, __, ___) => inFlight.future,
+    );
+    await log.sessionSample(false);
+    clock = started.add(const Duration(seconds: 4));
+    final scan = log.sessionSample(false);
+    await log.sessionSample(true);
+    inFlight.complete([
+      SunshineStreamEvidence(started, clock,
+          failure: SunshineStreamFailure.launch)
+    ]);
+    await scan;
+    expect(await log.read(), isEmpty);
+    clock = started.add(const Duration(seconds: 8));
+    await log.sessionSample(false);
+    expect((await log.read()).single.outcome, ConnectionOutcome.completed);
+  });
+
+  test('formats a failed stream using Sunshine evidence', () async {
+    final started = DateTime.utc(2026, 11, 28, 1, 10);
+    var clock = started;
+    final observedEnd = started.add(const Duration(seconds: 12));
+    final log = ConnectionLog(
+      now: () => clock,
+      streamEvidence: (sampledStart, sampledEnd) async =>
+          SunshineStreamEvidence(started, observedEnd,
+              failure: SunshineStreamFailure.networkTimeout),
+    );
+    await log.sessionSample(true);
+    clock = started.add(const Duration(seconds: 13));
+    await log.sessionSample(false);
+    final row = (await log.read()).single;
+    expect(row.end, observedEnd);
+    expect(row.outcome, ConnectionOutcome.failed);
+    expect(row.issue, ConnectionIssue.streamNetworkTimeout);
+    expect(row.client, isEmpty);
+    expect(
+        ConnectionLog.exportText([row]), contains('串流失败 · Sunshine 与控制端通信超时'));
+  });
+
+  test('keeps the verified peer name and omits its address', () async {
+    final started = DateTime.utc(2026, 11, 28, 1, 10);
+    final ended = started.add(const Duration(seconds: 10));
+    var clock = started;
+    final peer = InternetAddress('100.90.8.4');
+    final log = ConnectionLog(
+      now: () => clock,
+      streamEvidence: (_, __) async => SunshineStreamEvidence(started, ended,
+          failure: SunshineStreamFailure.networkTimeout, peerAddress: peer),
+      peerName: (address) async {
+        expect(address, peer);
+        return 'lab-pc';
+      },
+    );
+    await log.sessionSample(true);
+    clock = ended;
+    await log.sessionSample(false);
+    final row = (await ConnectionLog().read()).single;
+    expect(row.client, 'lab-pc');
+    expect(row.toJson().values, isNot(contains(peer.address)));
+    expect(ConnectionLog.exportText([row]), isNot(contains(peer.address)));
+  });
+
+  test('stores a name but no address after an ordinary disconnect', () async {
+    final start = DateTime(2026, 11, 28, 12, 0, 4);
+    final end = DateTime(2026, 11, 28, 12, 0, 22);
+    var clock = start;
+    const peer = '100.64.12.1';
+    final log = ConnectionLog(
+      now: () => clock,
+      streamEvidence: (start, end) async => SunshineStreamLog.parse('''
+[2026-11-28 12:00:02.250]: Info: New streaming session started [active sessions: 1]
+[2026-11-28 12:00:03.500]: Debug: Control peer address [$peer:60421]
+[2026-11-28 12:00:03.500]: Info: CLIENT CONNECTED
+[2026-11-28 12:00:20.000]: Info: CLIENT DISCONNECTED
+''', start, end),
+      peerName: (address) async {
+        expect(address.address, peer);
+        return 'lab-pc';
+      },
+    );
+    await log.sessionSample(true);
+    clock = end;
+    await log.sessionSample(false);
+    final row = (await ConnectionLog().read()).single;
+    expect(row.outcome, ConnectionOutcome.completed);
+    expect(row.client, 'lab-pc');
+    expect(row.toJson().values, isNot(contains(peer)));
+    expect(ConnectionLog.exportText([row]), isNot(contains(peer)));
+  });
+
+  test('captures known pairing outcomes and safely exports UTF-8 text',
+      () async {
+    final log = ConnectionLog();
+    log.pairingSeen('one', '实验室电脑');
+    await log.pairingCompleted('one');
+    log.pairingSeen('two', '便携机\n第三方字段');
+    await log.pairingFailed('two', ConnectionIssue.pairingApproval);
+    await log.pairingSample([]);
+    final rows = await log.read();
+    expect(rows, hasLength(2));
+    expect(rows.map((row) => row.outcome),
+        containsAll([ConnectionOutcome.completed, ConnectionOutcome.failed]));
+    final temp = await Directory.systemTemp.createTemp('qg-connection-log-');
+    final exported =
+        File('${temp.path}${Platform.pathSeparator}connections.txt');
+    addTearDown(() async {
+      if (await exported.exists()) await exported.delete();
+      await temp.delete();
+    });
+    await exported.writeAsString(ConnectionLog.exportText(rows));
+    final text = await exported.readAsString();
+    expect(text.split('\n'), hasLength(4));
+    expect(text, contains('实验室电脑'));
+    expect(text, contains('配对未通过 · 未收到 Sunshine 的配对确认'));
+    expect(text, contains('便携机 第三方字段'));
+  });
+
+  test('keeps a pending approval until its result arrives', () async {
+    final log = ConnectionLog();
+    const request = (id: 'one', name: '实验室电脑', address: '100.64.12.1');
+    await log.pairingSample([request]);
+    log.pairingApprovalStarted(request.id);
+    await log.pairingSample([]);
+    expect(await log.read(), isEmpty);
+    await log.pairingCompleted(request.id);
+    expect((await ConnectionLog().read()).single.outcome,
+        ConnectionOutcome.completed);
+  });
+
+  test('finalizes failed approval after the request disappears', () async {
+    final log = ConnectionLog();
+    const request = (id: 'one', name: '实验室电脑', address: '100.64.12.1');
+    await log.pairingSample([request]);
+    log.pairingApprovalStarted(request.id);
+    await log.pairingSample([]);
+    await log.pairingFailed(request.id, ConnectionIssue.pairingLookup);
+    final row = (await ConnectionLog().read()).single;
+    expect(row.issue, ConnectionIssue.pairingLookup);
+    expect(row.outcome, ConnectionOutcome.failed);
+    expect(row.toJson().values, isNot(contains(request.address)));
+  });
+
+  test('ignores an old polling result after approval succeeds', () async {
+    final log = ConnectionLog();
+    const request = (id: 'one', name: '实验室电脑', address: '100.64.12.1');
+    await log.pairingSample([request]);
+    log.pairingApprovalStarted(request.id);
+    await log.pairingCompleted(request.id);
+    await log.pairingSample([request]);
+    await log.pairingSample([]);
+    expect((await log.read()).single.outcome, ConnectionOutcome.completed);
+  });
+
+  test('keeps a confirmed expired request from reappearing', () async {
+    final log = ConnectionLog();
+    const request = (id: 'one', name: '实验室电脑', address: '100.64.12.1');
+    await log.pairingSample([request]);
+    log.pairingApprovalStarted(request.id);
+    await log.pairingFailed(request.id, ConnectionIssue.pairingEnded);
+    await log.pairingSample([request]);
+    await log.pairingSample([]);
+    expect((await log.read()).single.issue, ConnectionIssue.pairingEnded);
+  });
+
+  test('reads a preexisting entry without an issue', () {
+    final row = ConnectionEntry.fromJson({
+      'kind': 'pairing',
+      'start': '2026-11-28T00:00:00Z',
+      'end': '2026-11-28T00:00:02Z',
+      'client': '旧设备',
+      'result': 'failed',
+    });
+    expect(row.issue, isNull);
+    expect(row.duration.inSeconds, 2);
+    expect(row.outcomeLabel, '配对未通过');
+  });
+}

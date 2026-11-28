@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 
 import '../models/device.dart';
 import 'auto_lock_service.dart';
+import 'connection_log.dart';
 import 'file_transfer_host.dart';
 import 'mesh_status_service.dart';
 import 'pairing_worker_client.dart';
@@ -51,6 +52,7 @@ class HostTray {
     _timer = null;
     _account = null;
     _autoLock.reset();
+    unawaited(ConnectionLog.instance.stop());
     unawaited(FileTransferHost.instance.stop());
     unawaited(PrivacyScreenService.instance.stop());
     _seen.clear();
@@ -89,6 +91,11 @@ class HostTray {
     } on Exception {
       // The host screen can retry registration if Windows storage is unavailable.
     }
+    try {
+      await ConnectionLog.instance.loadRecordingSetting();
+    } on Exception {
+      // A local preference failure must not stop the host tray.
+    }
     if (generation != _generation) return;
     FileTransferHost.instance.start();
     _timer = Timer.periodic(const Duration(seconds: 2), (_) {
@@ -103,6 +110,7 @@ class HostTray {
     final generation = _generation;
     return PrivacyScreenService.instance.poll(onSample: (sample) async {
       if (_enabled && generation == _generation) {
+        unawaited(ConnectionLog.instance.sessionSample(sample));
         await _autoLock.onSessionSample(sample);
       }
     });
@@ -155,6 +163,7 @@ class HostTray {
       final requests =
           await _api.listPairings(_local, account.user, account.password);
       if (generation != _generation || !identical(account, _account)) return;
+      unawaited(ConnectionLog.instance.pairingSample(requests));
       final ids = requests.map((request) => request.id).toSet();
       _seen.removeWhere((id, _) => !ids.contains(id));
       _dismissed.retainAll(ids);
@@ -202,19 +211,34 @@ class HostTray {
                 name: name,
                 address: request.address,
                 confirm: (pin) async {
-                  final current = await _api.listPairings(
-                      _local, account.user, account.password);
-                  if (generation != _generation ||
-                      !current.any((entry) => entry.id == request.id)) {
-                    throw const HttpException('请求已结束，请让对方重新发起。');
+                  final log = ConnectionLog.instance;
+                  log.pairingApprovalStarted(request.id);
+                  var issue = ConnectionIssue.pairingLookup;
+                  try {
+                    final current = await _api.listPairings(
+                        _local, account.user, account.password);
+                    if (generation != _generation ||
+                        !current.any((entry) => entry.id == request.id)) {
+                      issue = ConnectionIssue.pairingEnded;
+                      throw const HttpException('请求已结束，请让对方重新发起。');
+                    }
+                    issue = ConnectionIssue.pairingApproval;
+                    await _api.approveRequest(
+                        device: _local,
+                        pin: pin,
+                        adminUser: account.user,
+                        adminPassword: account.password,
+                        pairingId: request.id,
+                        clientName: name);
+                    if (generation == _generation) {
+                      unawaited(log.pairingCompleted(request.id));
+                    }
+                  } catch (_) {
+                    if (generation == _generation) {
+                      unawaited(log.pairingFailed(request.id, issue));
+                    }
+                    rethrow;
                   }
-                  await _api.approveRequest(
-                      device: _local,
-                      pin: pin,
-                      adminUser: account.user,
-                      adminPassword: account.password,
-                      pairingId: request.id,
-                      clientName: name);
                 },
               ));
       _prompt = route;
