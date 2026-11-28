@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:xml/xml.dart';
 
@@ -97,7 +98,8 @@ class MeshStatusService {
   Future<HostStatus> check(Device device) async =>
       (await diagnose(device)).status;
 
-  Future<({HostStatus status, String detail})> diagnose(Device device) async {
+  Future<({HostStatus status, String detail, String? hostUuid})> diagnose(
+      Device device) async {
     const timeout = Duration(seconds: 4);
     final client = HttpClient()
       ..connectionTimeout = timeout
@@ -116,46 +118,183 @@ class MeshStatusService {
         if (response.statusCode != HttpStatus.ok) {
           return (
             status: HostStatus.unreachable,
+            hostUuid: null,
             detail: '远程服务返回 HTTP ${response.statusCode}。',
           );
         }
-        final body = await response.transform(utf8.decoder).join();
+        const maxServerInfoBytes = 64 * 1024;
+        final bytes = BytesBuilder(copy: false);
+        await for (final chunk in response) {
+          if (bytes.length + chunk.length > maxServerInfoBytes) {
+            throw const FormatException('Serverinfo too large');
+          }
+          bytes.add(chunk);
+        }
+        final body = utf8.decode(bytes.takeBytes());
         final info = XmlDocument.parse(body).rootElement;
         if (info.name.local != 'root' ||
             info.getAttribute('status_code') != '200' ||
             info.getElement('appversion') == null) {
           throw const FormatException('Invalid serverinfo');
         }
-        return (status: HostStatus.online, detail: '');
+        final reportedUuid = info.getElement('uniqueid')?.innerText.trim();
+        final validUuid = RegExp(
+          r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+          caseSensitive: false,
+        );
+        return (
+          status: HostStatus.online,
+          detail: '',
+          hostUuid: reportedUuid != null && validUuid.hasMatch(reportedUuid)
+              ? reportedUuid
+              : null,
+        );
       })()
           .timeout(timeout);
     } on SocketException catch (error) {
       return connectionRefused(error)
-          ? (status: HostStatus.offline, detail: '连接被拒绝，请确认对方已开启远程控制。')
-          : (status: HostStatus.unreachable, detail: '网络无法连接，请核对地址和双方的组网状态。');
+          ? (
+              status: HostStatus.offline,
+              hostUuid: null,
+              detail: '连接被拒绝，请确认对方已开启远程控制。'
+            )
+          : (
+              status: HostStatus.unreachable,
+              hostUuid: null,
+              detail: '网络无法连接，请核对地址和双方的组网状态。'
+            );
     } on TimeoutException {
       return (
         status: HostStatus.unreachable,
+        hostUuid: null,
         detail: '远程服务在 4 秒内没有回应，请确认对方已开机，双方组网已连接。'
       );
     } on HttpException {
       return (
         status: HostStatus.unreachable,
+        hostUuid: null,
         detail: '未收到完整的远程服务响应，请核对地址和连接端口。'
       );
     } on FormatException {
       return (
         status: HostStatus.unreachable,
+        hostUuid: null,
         detail: '该端口没有返回 Sunshine 设备信息，请核对连接端口。'
       );
     } on XmlException {
       return (
         status: HostStatus.unreachable,
+        hostUuid: null,
         detail: '该端口没有返回 Sunshine 设备信息，请核对连接端口。'
       );
     } finally {
       client.close(force: true);
     }
+  }
+
+  static const discoveryLimit = 16;
+
+  /// Only checks online peers reported by the locally connected Tailscale
+  /// client. No address enumeration, credentials, redirects, or writes.
+  Future<List<MeshComputer>> discoverTailscaleComputers({
+    Set<String> savedAddresses = const {},
+  }) async {
+    final payload = await readTailscaleDiscoveryStatus();
+    if (payload == null) {
+      throw const FormatException('Tailscale status unavailable');
+    }
+    final (self, peers) = parseTailscaleDiscoveryStatus(payload);
+    final local = await NetworkInterface.list(type: InternetAddressType.IPv4);
+    final excluded = {
+      ...savedAddresses,
+      ...self,
+      for (final interface in local)
+        for (final ip in interface.addresses) ip.address,
+    };
+    final candidates = peers
+        .where((peer) => !excluded.contains(peer.address))
+        .take(discoveryLimit)
+        .toList();
+    final found = <MeshComputer>[];
+    const concurrency = 8;
+    for (var i = 0; i < candidates.length; i += concurrency) {
+      final reachable = await Future.wait(
+          candidates.skip(i).take(concurrency).map((peer) async {
+        final status = await check(Device(
+          id: '',
+          name: peer.name,
+          meshAddress: peer.address,
+          network: NetworkKind.tailscale,
+        ));
+        return status == HostStatus.online ? peer : null;
+      }));
+      found.addAll(reachable.whereType<MeshComputer>());
+    }
+    return found;
+  }
+
+  Future<String?> readTailscaleDiscoveryStatus() async {
+    if (!Platform.isWindows) return null;
+    Process? process;
+    try {
+      process = await Process.start(_tailscaleCommand(), ['status', '--json']);
+      final result = await Future.wait<Object>([
+        process.stdout.transform(utf8.decoder).join(),
+        process.stderr.drain<void>().then((_) => 0),
+        process.exitCode,
+      ]).timeout(const Duration(seconds: 4));
+      return result[2] == 0 ? result[0] as String : null;
+    } on Exception {
+      return null;
+    } finally {
+      process?.kill();
+    }
+  }
+
+  static (Set<String>, List<MeshComputer>) parseTailscaleDiscoveryStatus(
+      String payload) {
+    final status = jsonDecode(payload);
+    if (status is! Map || status['BackendState'] != 'Running') {
+      throw const FormatException('Tailscale not connected');
+    }
+    Iterable<String> addresses(Object? raw) sync* {
+      if (raw is! List) return;
+      for (final value in raw.whereType<String>()) {
+        final ip = InternetAddress.tryParse(value);
+        if (ip?.type == InternetAddressType.IPv4 && _isTailscaleAddress(ip!)) {
+          yield ip.address;
+        }
+      }
+    }
+
+    final self = status['Self'];
+    final selfIps = {
+      ...addresses(status['TailscaleIPs']),
+      if (self is Map) ...addresses(self['TailscaleIPs']),
+    };
+    final peers = status['Peer'];
+    if (selfIps.isEmpty) throw const FormatException('Missing Tailscale IP');
+    if (peers is! Map) return (selfIps, const []);
+    final distinct = <String, MeshComputer>{};
+    for (final peer in peers.values) {
+      if (peer is! Map || peer['Online'] != true) continue;
+      for (final ip in addresses(peer['TailscaleIPs'])) {
+        if (selfIps.contains(ip)) continue;
+        final dns = peer['DNSName'];
+        final host = dns is String ? dns.split('.').first : '';
+        final name = RegExp(r'^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}$').hasMatch(host)
+            ? host
+            : ip;
+        distinct.putIfAbsent(ip, () => MeshComputer(name, ip));
+        break;
+      }
+    }
+    final ordered = distinct.values.toList()
+      ..sort((left, right) {
+        final name = left.name.compareTo(right.name);
+        return name == 0 ? left.address.compareTo(right.address) : name;
+      });
+    return (selfIps, ordered);
   }
 
   Future<bool?> tailscaleConnected() async {
@@ -170,6 +309,74 @@ class MeshStatusService {
     } on Exception {
       return null;
     }
+  }
+
+  Future<String?> tailscalePeerName(InternetAddress address) async {
+    final peer = _normalizePeer(address);
+    if (!Platform.isWindows || !_isTailscaleAddress(peer)) return null;
+    try {
+      final result = await Process.run(
+        _tailscaleCommand(),
+        ['whois', '--json', peer.address],
+      ).timeout(const Duration(seconds: 3));
+      return result.exitCode == 0
+          ? parseTailscalePeerName(result.stdout.toString(), peer)
+          : null;
+    } on Exception {
+      return null;
+    }
+  }
+
+  static InternetAddress _normalizePeer(InternetAddress address) {
+    final bytes = address.rawAddress;
+    if (address.type == InternetAddressType.IPv6 &&
+        bytes.take(10).every((byte) => byte == 0) &&
+        bytes[10] == 0xff &&
+        bytes[11] == 0xff) {
+      return InternetAddress.fromRawAddress(bytes.sublist(12));
+    }
+    return address;
+  }
+
+  static bool _isTailscaleAddress(InternetAddress address) {
+    final bytes = address.rawAddress;
+    if (address.type == InternetAddressType.IPv4) {
+      return bytes[0] == 100 && (bytes[1] & 0xc0) == 0x40;
+    }
+    const prefix = [0xfd, 0x7a, 0x11, 0x5c, 0xa1, 0xe0];
+    return prefix
+        .asMap()
+        .entries
+        .every((pair) => bytes[pair.key] == pair.value);
+  }
+
+  static String? parseTailscalePeerName(
+      String payload, InternetAddress address) {
+    final peer = _normalizePeer(address);
+    if (!_isTailscaleAddress(peer)) return null;
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(payload);
+    } on FormatException {
+      return null;
+    }
+    if (decoded is! Map || decoded['Node'] is! Map) return null;
+    final node = decoded['Node'] as Map;
+    final addresses = node['Addresses'];
+    final name = node['Name'];
+    if (addresses is! List || name is! String) return null;
+    final fullMask = peer.type == InternetAddressType.IPv4 ? '32' : '128';
+    final ownAddress = addresses.whereType<String>().any((address) {
+      final parts = address.split('/');
+      return parts.length == 2 &&
+          parts[1] == fullMask &&
+          InternetAddress.tryParse(parts[0]) == peer;
+    });
+    if (!ownAddress) return null;
+    final host = name.split('.').first;
+    return RegExp(r'^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}$').hasMatch(host)
+        ? host
+        : null;
   }
 
   String _tailscaleCommand() {
@@ -196,6 +403,13 @@ class MeshStatusService {
     }
     return null;
   }
+}
+
+class MeshComputer {
+  const MeshComputer(this.name, this.address);
+
+  final String name;
+  final String address;
 }
 
 class LocalAddress {

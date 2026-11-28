@@ -1,0 +1,457 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:cryptography/cryptography.dart';
+
+import 'file_transfer_service.dart';
+import 'host_hardware.dart';
+import 'remote_command.dart';
+import 'wake_on_lan.dart';
+
+const _path = '/v1/host-tools/';
+const _timeout = Duration(seconds: 8);
+const _challengeLife = Duration(seconds: 30);
+const clipboardMaxBytes = 64 * 1024;
+const _digestBytes = 32;
+const _maxBodyBytes = clipboardMaxBytes + _digestBytes + 28;
+final _cipher = AesGcm.with256bits();
+final _clipboardDigest = Sha256();
+
+class HostToolsException implements Exception {
+  const HostToolsException(this.message);
+  final String message;
+}
+
+Future<List<int>> _read(Stream<List<int>> stream, int size) async {
+  final bytes = <int>[];
+  await for (final chunk in stream.timeout(_timeout)) {
+    if (chunk.length > size - bytes.length) throw const FormatException();
+    bytes.addAll(chunk);
+  }
+  return bytes;
+}
+
+bool _sameDigest(List<int> left, List<int> right) {
+  for (var i = 0; i < left.length; i++) {
+    if (left[i] != right[i]) return false;
+  }
+  return true;
+}
+
+List<int> _aad(String phase, String binding) =>
+    utf8.encode('qg-host-tools-v1/$phase/$binding');
+
+Future<List<int>> _seal(
+    String code, String phase, String binding, List<int> bytes) async {
+  final box = await _cipher.encrypt(bytes,
+      secretKey: SecretKey(base64Url.decode('$code=')),
+      aad: _aad(phase, binding));
+  return box.concatenation();
+}
+
+Future<List<int>> _open(
+    String code, String phase, String binding, List<int> bytes) {
+  if (bytes.length < 28) throw const FormatException();
+  return _cipher.decrypt(
+      SecretBox.fromConcatenation(bytes, nonceLength: 12, macLength: 16),
+      secretKey: SecretKey(base64Url.decode('$code=')),
+      aad: _aad(phase, binding));
+}
+
+// A handler that awaits local preparation must recheck the grant before
+// starting the command. Revocation cannot undo a process already started.
+typedef RunAllowedCommand = Future<String> Function(
+    RemoteCommand command, bool Function() stillAllowed);
+
+class HostToolsServer {
+  HostToolsServer(
+      {required this.code,
+      required this.readClipboard,
+      required this.writeClipboard,
+      this.readDiagnostics,
+      this.runCommand,
+      this.readHardware,
+      this.sendWake,
+      this.streaming});
+
+  final String code;
+  final Future<String> Function() readClipboard;
+  final Future<void> Function(String) writeClipboard;
+  final Future<String> Function()? readDiagnostics;
+  final RunAllowedCommand? runCommand;
+  final Future<HostHardware> Function()? readHardware;
+  final Future<void> Function(String)? sendWake;
+  Set<String> wakeTargets = const {};
+  final bool Function()? streaming;
+  bool clipboardEnabled = false;
+  bool clipboardSyncEnabled = false;
+  bool hardwareEnabled = false;
+  bool diagnosticsEnabled = false;
+  bool _commandsEnabled = false;
+  int _commandGeneration = 0;
+  bool get commandsEnabled => _commandsEnabled;
+  set commandsEnabled(bool enabled) {
+    if (enabled == _commandsEnabled) return;
+    _commandsEnabled = enabled;
+    _commandGeneration++;
+  }
+
+  bool active = true;
+  final _issued = <String, ({Duration expiry, int commandGeneration})>{};
+  final _usedHellos = <String, Duration>{};
+  final _clock = Stopwatch()..start();
+  int _pending = 0;
+  bool _commandRunning = false;
+
+  bool _allows(String operation) =>
+      active &&
+      switch (operation) {
+        'challenge' => clipboardEnabled ||
+            diagnosticsEnabled ||
+            commandsEnabled ||
+            hardwareEnabled ||
+            wakeTargets.isNotEmpty && sendWake != null,
+        'clipboard-read' || 'clipboard-write' => clipboardEnabled,
+        'clipboard-watch' ||
+        'clipboard-push' =>
+          clipboardEnabled && clipboardSyncEnabled && streaming?.call() == true,
+        'diagnostics' => diagnosticsEnabled && readDiagnostics != null,
+        'command' => commandsEnabled && runCommand != null,
+        'wake' => wakeTargets.isNotEmpty && sendWake != null,
+        'hardware' => hardwareEnabled && readHardware != null,
+        _ => false,
+      };
+
+  bool _commandIsCurrent(int generation) =>
+      active && _commandsEnabled && generation == _commandGeneration;
+
+  static bool handles(String path) => path.startsWith(_path);
+
+  Future<void> handle(HttpRequest request) async {
+    final response = request.response;
+    response.persistentConnection = false;
+    response.headers.set(HttpHeaders.cacheControlHeader, 'no-store');
+    response.headers.contentType = ContentType.binary;
+    var counted = false;
+    try {
+      final operation = request.uri.path.substring(_path.length);
+      final generationAtArrival = _commandGeneration;
+      int? authorizedCommandGeneration;
+      if (!_allows(operation)) {
+        response.statusCode = HttpStatus.forbidden;
+        return;
+      }
+      final id = request.headers.value('x-qg-request') ?? '';
+      if (request.method != 'POST' ||
+          !validTransferCode(id) ||
+          !const {
+            'challenge',
+            'clipboard-read',
+            'clipboard-write',
+            'clipboard-watch',
+            'clipboard-push',
+            'diagnostics',
+            'command',
+            'hardware',
+            'wake'
+          }.contains(operation)) {
+        response.statusCode = HttpStatus.badRequest;
+        return;
+      }
+      final limit = switch (operation) {
+        'clipboard-write' || 'clipboard-push' => clipboardMaxBytes + 28,
+        'clipboard-watch' => _digestBytes + 28,
+        'wake' => 28 + 17,
+        'command' => 28 + 16,
+        _ => 28,
+      };
+      if (request.contentLength < 28 || request.contentLength > limit) {
+        response.statusCode = HttpStatus.badRequest;
+        return;
+      }
+      if (_pending >= 8) {
+        response.statusCode = HttpStatus.tooManyRequests;
+        return;
+      }
+      _pending++;
+      counted = true;
+      final binding = '$operation/$id';
+      final plaintext = await _open(code, 'request', binding,
+          await _read(request, limit).timeout(_timeout));
+      if (!_allows(operation)) {
+        response.statusCode = HttpStatus.forbidden;
+        return;
+      }
+      final now = _clock.elapsed;
+      _issued.removeWhere((_, grant) => grant.expiry <= now);
+      _usedHellos.removeWhere((_, expiry) => expiry <= now);
+      final List<int> result;
+      if (operation == 'challenge') {
+        if (_usedHellos.containsKey(id) ||
+            _usedHellos.length >= 64 ||
+            _issued.length >= 32) {
+          response.statusCode = HttpStatus.tooManyRequests;
+          return;
+        }
+        final challenge = newTransferCode();
+        _usedHellos[id] = now + _challengeLife;
+        _issued[challenge] = (
+          expiry: now + _challengeLife,
+          commandGeneration: generationAtArrival,
+        );
+        result = utf8.encode(challenge);
+      } else {
+        final grant = _issued.remove(id);
+        if (grant == null) {
+          response.statusCode = HttpStatus.unauthorized;
+          return;
+        }
+        if (operation == 'hardware') {
+          result = utf8.encode(
+              jsonEncode((await readHardware!().timeout(_timeout)).toJson()));
+        } else if (operation == 'diagnostics') {
+          result = utf8.encode(await readDiagnostics!().timeout(_timeout));
+        } else if (operation == 'command') {
+          final authorized = grant.commandGeneration;
+          if (!_commandIsCurrent(authorized)) {
+            response.statusCode = HttpStatus.forbidden;
+            return;
+          }
+          authorizedCommandGeneration = authorized;
+          final query = RemoteCommand.parse(utf8.decode(plaintext));
+          if (query == null) {
+            response.statusCode = HttpStatus.badRequest;
+            return;
+          }
+          if (_commandRunning) {
+            response.statusCode = HttpStatus.tooManyRequests;
+            return;
+          }
+          _commandRunning = true;
+          try {
+            result = utf8.encode(
+                await runCommand!(query, () => _commandIsCurrent(authorized)));
+          } finally {
+            _commandRunning = false;
+          }
+        } else if (operation == 'wake') {
+          final mac = WakeOnLan.normalizeMac(utf8.decode(plaintext));
+          if (mac == null) throw const FormatException();
+          if (!wakeTargets.contains(mac)) {
+            response.statusCode = HttpStatus.forbidden;
+            return;
+          }
+          await sendWake!(mac).timeout(_timeout);
+          result = const [];
+        } else if (operation == 'clipboard-watch') {
+          if (plaintext.isNotEmpty && plaintext.length != _digestBytes) {
+            throw const FormatException();
+          }
+          final text = await readClipboard().timeout(_timeout);
+          final bytes =
+              text.length <= clipboardMaxBytes ? utf8.encode(text) : <int>[];
+          final sendable =
+              bytes.isNotEmpty && bytes.length <= clipboardMaxBytes;
+          final digest = sendable
+              ? (await _clipboardDigest.hash(bytes)).bytes
+              : List<int>.filled(_digestBytes, 0);
+          final changed =
+              plaintext.isNotEmpty && !_sameDigest(plaintext, digest);
+          result = [...digest, if (sendable && changed) ...bytes];
+        } else if (operation == 'clipboard-push') {
+          if (plaintext.isEmpty) throw const FormatException();
+          await writeClipboard(utf8.decode(plaintext)).timeout(_timeout);
+          result = (await _clipboardDigest.hash(plaintext)).bytes;
+        } else if (operation == 'clipboard-read') {
+          result = utf8.encode(await readClipboard().timeout(_timeout));
+          if (result.isEmpty || result.length > clipboardMaxBytes) {
+            response.statusCode = HttpStatus.unprocessableEntity;
+            return;
+          }
+        } else {
+          if (plaintext.isEmpty) throw const FormatException();
+          await writeClipboard(utf8.decode(plaintext)).timeout(_timeout);
+          result = const [];
+        }
+      }
+      final sealed = await _seal(code, 'response', binding, result);
+      if (!_allows(operation) ||
+          (authorizedCommandGeneration != null &&
+              !_commandIsCurrent(authorizedCommandGeneration))) {
+        response.statusCode = HttpStatus.forbidden;
+        return;
+      }
+      response.contentLength = sealed.length;
+      response.add(sealed);
+    } on SecretBoxAuthenticationError {
+      response.statusCode = HttpStatus.unauthorized;
+    } on FormatException {
+      response.statusCode = HttpStatus.badRequest;
+    } catch (_) {
+      response.statusCode = HttpStatus.serviceUnavailable;
+    } finally {
+      if (counted) _pending--;
+      try {
+        await response.close();
+      } on Exception {
+        // Client left before receiving the response.
+      }
+    }
+  }
+}
+
+/// Cancels only a single automatic clipboard session, not manual host tools.
+/// A write already delivered to the peer cannot be undone.
+class ClipboardSyncCancellation {
+  bool _cancelled = false;
+  final _clients = <HttpClient>{};
+
+  void cancel() {
+    if (_cancelled) return;
+    _cancelled = true;
+    for (final client in _clients) {
+      client.close(force: true);
+    }
+    _clients.clear();
+  }
+
+  void _check() {
+    if (_cancelled) throw const _ClipboardSyncStopped();
+  }
+}
+
+class _ClipboardSyncStopped implements Exception {
+  const _ClipboardSyncStopped();
+}
+
+class HostToolsClient {
+  HostToolsClient(this.address, this.code, {this.port = fileTransferPort});
+
+  final String address;
+  final String code;
+  final int port;
+
+  Future<String> readClipboard() async =>
+      utf8.decode(await _exchange('clipboard-read', const []));
+
+  Future<String> diagnostics() async =>
+      utf8.decode(await _exchange('diagnostics', const []));
+
+  Future<String> command(RemoteCommand query) async =>
+      utf8.decode(await _exchange('command', utf8.encode(query.command)));
+
+  Future<HostHardware> hardware() async => HostHardware.fromJson(
+      jsonDecode(utf8.decode(await _exchange('hardware', const [])))
+          as Map<String, dynamic>);
+
+  Future<({List<int> digest, String? text})> watchClipboard(
+    List<int>? digest, {
+    ClipboardSyncCancellation? cancellation,
+  }) async {
+    final bytes = await _exchange('clipboard-watch', digest ?? const [],
+        cancellation: cancellation);
+    if (bytes.length < _digestBytes) throw const FormatException();
+    return (
+      digest: bytes.sublist(0, _digestBytes),
+      text: bytes.length == _digestBytes
+          ? null
+          : utf8.decode(bytes.sublist(_digestBytes)),
+    );
+  }
+
+  Future<List<int>> pushClipboard(String text,
+      {ClipboardSyncCancellation? cancellation}) async {
+    final bytes = utf8.encode(text);
+    if (bytes.isEmpty || bytes.length > clipboardMaxBytes) {
+      throw const FormatException();
+    }
+    final result =
+        await _exchange('clipboard-push', bytes, cancellation: cancellation);
+    if (result.length != _digestBytes) throw const FormatException();
+    return result;
+  }
+
+  Future<void> wake(String mac) async {
+    final normalized = WakeOnLan.normalizeMac(mac);
+    if (normalized == null) throw const FormatException();
+    await _exchange('wake', utf8.encode(normalized));
+  }
+
+  Future<void> writeClipboard(String text) async {
+    final bytes = utf8.encode(text);
+    if (bytes.isEmpty || bytes.length > clipboardMaxBytes) {
+      throw const HostToolsException('剪贴板需要有文本，最多支持 64 KiB。');
+    }
+    await _exchange('clipboard-write', bytes);
+  }
+
+  Future<List<int>> _exchange(String operation, List<int> payload,
+      {ClipboardSyncCancellation? cancellation}) async {
+    cancellation?._check();
+    if (!validTransferCode(code)) {
+      throw const HostToolsException('请填写正确的协作码。');
+    }
+    final client = HttpClient()
+      ..connectionTimeout = _timeout
+      ..findProxy = (_) => 'DIRECT';
+    cancellation?._clients.add(client);
+    try {
+      final hello =
+          await _post(client, 'challenge', newTransferCode(), const []);
+      cancellation?._check();
+      final challenge = utf8.decode(hello);
+      if (!validTransferCode(challenge)) throw const FormatException();
+      return await _post(client, operation, challenge, payload);
+    } on HostToolsException {
+      rethrow;
+    } on SecretBoxAuthenticationError {
+      throw const HostToolsException('无法验证被控电脑的回应。请重新确认协作码。');
+    } on Exception {
+      throw const HostToolsException('无法连接被控电脑。请检查组网和被控端开关。');
+    } finally {
+      cancellation?._clients.remove(client);
+      client.close(force: true);
+    }
+  }
+
+  Future<List<int>> _post(
+      HttpClient client, String operation, String id, List<int> payload) async {
+    final binding = '$operation/$id';
+    final sealed = await _seal(code, 'request', binding, payload);
+    final request = await client
+        .postUrl(Uri(
+            scheme: 'http',
+            host: address,
+            port: port,
+            path: '$_path$operation'))
+        .timeout(_timeout);
+    request.followRedirects = false;
+    request.headers.set('x-qg-request', id);
+    request.headers.contentType = ContentType.binary;
+    request.contentLength = sealed.length;
+    request.add(sealed);
+    final replyTimeout = operation == 'command'
+        ? RemoteCommand.approvedTimeout + const Duration(seconds: 5)
+        : _timeout;
+    final response = await request.close().timeout(replyTimeout);
+    if (response.statusCode != HttpStatus.ok) {
+      throw HostToolsException(switch (response.statusCode) {
+        HttpStatus.forbidden => switch (operation) {
+            'wake' => '转发电脑未开启唤醒转发，或尚未登记这台电脑的有线网卡 MAC。',
+            'clipboard-watch' || 'clipboard-push' => '被控电脑未开启自动同步剪贴板，或串流已结束。',
+            _ => '被控电脑未开启这项功能。',
+          },
+        HttpStatus.unauthorized => '协作码不正确，或请求已过期。',
+        HttpStatus.unprocessableEntity => '被控端剪贴板没有可发送的文本，或文本超过 64 KiB。',
+        HttpStatus.tooManyRequests => '被控电脑繁忙，请稍后再试。',
+        _ => '被控电脑暂时无法完成操作。',
+      });
+    }
+    if (response.contentLength < 28 || response.contentLength > _maxBodyBytes) {
+      throw const FormatException();
+    }
+    return _open(code, 'response', binding,
+        await _read(response, _maxBodyBytes).timeout(_timeout));
+  }
+}

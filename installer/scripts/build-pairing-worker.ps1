@@ -25,6 +25,6 @@ Copy-Item -LiteralPath (Join-Path $root 'pairing_worker/README.md') -Destination
 # in the Windows packages. Local builds may include uncommitted changes.
 if ($env:GITHUB_ACTIONS -eq 'true') {
     $source = Join-Path $licenses 'PAIRING-WORKER-SOURCE.zip'
-    git -C $root archive --format=zip --output=$source HEAD pairing_worker installer/scripts/build-pairing-worker.ps1 .github/workflows/build.yml
+    git -C $root archive --format=zip --output=$source HEAD pairing_worker launcher/pubspec.yaml installer/scripts/build-pairing-worker.ps1 .github/workflows/build.yml
     if ($LASTEXITCODE -ne 0) { throw 'Pairing worker source archive failed.' }
 }

@@ -78,7 +78,7 @@ class _PrivacyScreenSettingsState extends State<PrivacyScreenSettings> {
         children: [
           Text('隐私屏', style: Theme.of(context).textTheme.titleSmall),
           const SizedBox(height: 4),
-          const Text('目前仅支持本机预览，串流时不会自动遮挡屏幕。'),
+          const Text('串流时自动遮挡本机屏幕。正在连接时修改，下次连接生效。'),
           if (settings != null) ...[
             const SizedBox(height: 12),
             ValueListenableBuilder<bool>(
@@ -88,7 +88,7 @@ class _PrivacyScreenSettingsState extends State<PrivacyScreenSettings> {
                 children: [
                   DropdownButtonFormField<PrivacyMode>(
                     value: settings.mode,
-                    decoration: const InputDecoration(labelText: '预览模式'),
+                    decoration: const InputDecoration(labelText: '遮挡方式'),
                     items: const [
                       DropdownMenuItem(
                           value: PrivacyMode.off, child: Text('关闭')),
@@ -117,7 +117,12 @@ class _PrivacyScreenSettingsState extends State<PrivacyScreenSettings> {
                       label: const Text('选择 JPG / PNG'),
                     ),
                     if (_smallImage) const Text('建议用 1920×1080 以上的图片。'),
-                    if (_fallback) const Text('图片打不开，已用黑屏代替。'),
+                    ValueListenableBuilder<bool>(
+                      valueListenable: _service.liveImageFallback,
+                      builder: (_, fallback, __) => _fallback || fallback
+                          ? const Text('图片打不开，已用黑屏代替。')
+                          : const SizedBox.shrink(),
+                    ),
                   ],
                   const SizedBox(height: 8),
                   ValueListenableBuilder<bool?>(

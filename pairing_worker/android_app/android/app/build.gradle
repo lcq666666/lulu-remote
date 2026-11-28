@@ -4,22 +4,10 @@ plugins {
     id "dev.flutter.flutter-gradle-plugin"
 }
 
-def localProperties = new Properties()
-def localPropertiesFile = rootProject.file('local.properties')
-if (localPropertiesFile.exists()) {
-    localPropertiesFile.withReader('UTF-8') { reader ->
-        localProperties.load(reader)
-    }
-}
-
-def flutterVersionCode = localProperties.getProperty('flutter.versionCode')
-if (flutterVersionCode == null) {
-    flutterVersionCode = '1'
-}
-
-def flutterVersionName = localProperties.getProperty('flutter.versionName')
-if (flutterVersionName == null) {
-    flutterVersionName = '0.1.0'
+def launcherPubspec = file('../../../../launcher/pubspec.yaml')
+def versionLine = launcherPubspec.getText('UTF-8') =~ /(?m)^version: ([0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.]+)?)\+(\d+)\s*$/
+if (!versionLine.find()) {
+    throw new GradleException('Invalid launcher version in pubspec.yaml')
 }
 
 android {
@@ -40,8 +28,8 @@ android {
         applicationId "com.lulu.remote.pairing"
         minSdk 21
         targetSdk 34
-        versionCode flutterVersionCode.toInteger()
-        versionName flutterVersionName
+        versionCode versionLine.group(2).toInteger()
+        versionName versionLine.group(1)
     }
 
     def sharedDebugKeystore = System.getenv('LULU_ANDROID_DEBUG_KEYSTORE')
@@ -72,7 +60,9 @@ android {
 
     buildTypes {
         release {
-            signingConfig(keyPropertiesFile.exists() ? signingConfigs.release : signingConfigs.debug)
+            if (keyPropertiesFile.exists()) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 }

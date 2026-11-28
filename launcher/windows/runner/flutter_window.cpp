@@ -1,11 +1,17 @@
 #include "flutter_window.h"
 
+#include <shlobj.h>
+
 #include <shellapi.h>
 #include <wincred.h>
 
+#include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 
+#include "lan_interfaces.h"
+#include "moonlight_shortcut.h"
 #include "resource.h"
 #include "sunshine_session.h"
 #include "utils.h"
@@ -16,6 +22,60 @@ namespace {
 constexpr UINT kTrayMessage = WM_APP + 1;
 constexpr UINT kShowMessage = WM_APP + 2;
 constexpr wchar_t kCredentialName[] = L"LULU Remote/Sunshine host";
+
+struct StreamWindowSearch {
+  DWORD process_id;
+  HWND window = nullptr;
+};
+
+BOOL CALLBACK FindStreamWindow(HWND window, LPARAM context) {
+  auto* search = reinterpret_cast<StreamWindowSearch*>(context);
+  DWORD owner = 0;
+  ::GetWindowThreadProcessId(window, &owner);
+  if (owner != search->process_id || !::IsWindowVisible(window)) return TRUE;
+  wchar_t window_class[32] = {};
+  wchar_t title[512] = {};
+  ::GetClassNameW(window, window_class, ARRAYSIZE(window_class));
+  const int length = ::GetWindowTextW(window, title, ARRAYSIZE(title));
+  constexpr std::wstring_view suffix = L" - Moonlight";
+  const std::wstring_view text(title, static_cast<size_t>(length));
+  if (std::wstring_view(window_class) != L"SDL_app" ||
+      text.size() < suffix.size() ||
+      text.substr(text.size() - suffix.size()) != suffix) return TRUE;
+  search->window = window;
+  return FALSE;
+}
+
+// Return false before injecting any input so the initial switch can retry
+// when the newly launched stream becomes ready and takes focus.
+bool SwitchStreamMonitor(DWORD process_id, int screen, bool focus) {
+  StreamWindowSearch search{process_id};
+  ::EnumWindows(FindStreamWindow, reinterpret_cast<LPARAM>(&search));
+  if (!search.window) return false;
+  if (focus && ::GetForegroundWindow() != search.window) {
+    if (::IsIconic(search.window)) ::ShowWindow(search.window, SW_RESTORE);
+    ::SetForegroundWindow(search.window);
+  }
+  constexpr WORD modifiers[] = {VK_LCONTROL, VK_LMENU, VK_LSHIFT};
+  for (const int modifier : {VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN}) {
+    if (::GetAsyncKeyState(modifier) & 0x8000) return false;
+  }
+  if (::GetForegroundWindow() != search.window) return false;
+  const WORD keys[] = {modifiers[0], modifiers[1], modifiers[2],
+                       static_cast<WORD>(VK_F1 + screen - 1)};
+  INPUT input[8]{};
+  for (size_t i = 0; i < ARRAYSIZE(keys); ++i) {
+    input[i].type = INPUT_KEYBOARD;
+    input[i].ki.wVk = keys[i];
+    input[7 - i] = input[i];
+    input[7 - i].ki.dwFlags = KEYEVENTF_KEYUP;
+  }
+  const UINT sent = ::SendInput(ARRAYSIZE(input), input, sizeof(INPUT));
+  if (sent > 0 && sent < ARRAYSIZE(input)) {
+    ::SendInput(4, input + 4, sizeof(INPUT));
+  }
+  return sent == ARRAYSIZE(input);
+}
 
 NOTIFYICONDATAW TrayIcon(HWND window) {
   NOTIFYICONDATAW icon{};
@@ -92,7 +152,10 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     tray_added_ = false;
   }
   if (message == PrivacyScreen::kDismissedMessage) {
-    if (tray_channel_) tray_channel_->InvokeMethod("privacyScreenDismissed", nullptr);
+    if (tray_channel_) {
+      tray_channel_->InvokeMethod("privacyScreenDismissed",
+          std::make_unique<flutter::EncodableValue>(static_cast<int32_t>(wparam)));
+    }
     return 0;
   }
   if (message == kShowMessage) {
@@ -114,7 +177,7 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     if (lparam == WM_RBUTTONUP) {
       const HMENU menu = ::CreatePopupMenu();
       if (!menu) return 0;
-      ::AppendMenuW(menu, MF_STRING, 1, L"\u6253\u5f00 LULU");
+      ::AppendMenuW(menu, MF_STRING, 1, L"\u6253\u5f00\u5F3A\u54E5\u8FDC\u7A0B");
       ::AppendMenuW(menu, MF_STRING, 2, L"\u9000\u51fa");
       POINT cursor{};
       ::GetCursorPos(&cursor);
@@ -153,7 +216,7 @@ bool FlutterWindow::AddTrayIcon() {
   icon.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
   icon.uCallbackMessage = kTrayMessage;
   icon.hIcon = ::LoadIconW(::GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_APP_ICON));
-  wcscpy_s(icon.szTip, L"LULU Remote");
+  wcscpy_s(icon.szTip, L"\u5F3A\u54E5\u8FDC\u7A0B");
   return ::Shell_NotifyIconW(NIM_ADD, &icon) != FALSE;
 }
 
@@ -166,7 +229,39 @@ void FlutterWindow::HandleTrayCall(
     const flutter::MethodCall<flutter::EncodableValue>& call,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
   const auto& method = call.method_name();
-  if (method == "sunshineStreaming") {
+  if (method == "switchStreamMonitor") {
+    const auto* args = call.arguments()
+        ? std::get_if<flutter::EncodableMap>(call.arguments()) : nullptr;
+    const auto get = [args](const char* key) -> const flutter::EncodableValue* {
+      if (!args) return nullptr;
+      const auto entry = args->find(flutter::EncodableValue(key));
+      return entry == args->end() ? nullptr : &entry->second;
+    };
+    const auto* pid = std::get_if<int32_t>(get("pid"));
+    const auto* screen = std::get_if<int32_t>(get("screen"));
+    const auto* focus = std::get_if<bool>(get("focus"));
+    if (!pid || *pid <= 0 || !screen || *screen < 1 || *screen > 12 || !focus) {
+      result->Error("stream_monitor_arguments");
+      return;
+    }
+    result->Success(flutter::EncodableValue(
+        SwitchStreamMonitor(static_cast<DWORD>(*pid), *screen, *focus)));
+  } else if (method == "wakeLanInterfaces") {
+    flutter::EncodableList addresses;
+    for (const auto& address : ActiveLanInterfaceAddresses()) {
+      addresses.emplace_back(flutter::EncodableMap{
+          {flutter::EncodableValue("address"), flutter::EncodableValue(address.address)},
+          {flutter::EncodableValue("prefix"), flutter::EncodableValue(address.prefix_length)},
+      });
+    }
+    result->Success(flutter::EncodableValue(addresses));
+  } else if (method == "moonlightStartMenuTargets") {
+    flutter::EncodableList paths;
+    for (const auto& path : MoonlightStartMenuTargets()) {
+      paths.emplace_back(Utf8FromUtf16(path.c_str()));
+    }
+    result->Success(flutter::EncodableValue(paths));
+  } else if (method == "sunshineStreaming") {
     const auto streaming = SunshineStreaming();
     if (streaming) result->Success(flutter::EncodableValue(*streaming));
     else result->Success();
@@ -178,6 +273,16 @@ void FlutterWindow::HandleTrayCall(
       ::LockWorkStation();
     }
     result->Success();
+  } else if (method == "knownDesktop") {
+    PWSTR path = nullptr;
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_Desktop, 0, nullptr, &path))) {
+      CoTaskMemFree(path);
+      result->Error("desktop_folder");
+      return;
+    }
+    const auto location = Utf8FromUtf16(path);
+    CoTaskMemFree(path);
+    result->Success(flutter::EncodableValue(location));
   } else if (method == "pickPrivacyImage") {
     PrivacyImageFile image{};
     const auto picked = PickPrivacyImage(GetHandle(), &image);
@@ -196,16 +301,18 @@ void FlutterWindow::HandleTrayCall(
       }));
     }
   } else if (method == "showPrivacyScreen") {
-    // This branch only enables an idle preview. A regular topmost window is
-    // not sufficient for a curtain during remote capture.
-    if (SunshineStreaming() != std::optional<bool>(false)) {
-      result->Error("privacy_streaming");
-      return;
-    }
     const auto* args = call.arguments() ?
         std::get_if<flutter::EncodableMap>(call.arguments()) : nullptr;
     if (!args) {
       result->Error("privacy_arguments");
+      return;
+    }
+    const auto live_entry = args->find(flutter::EncodableValue("live"));
+    const auto* live_argument = live_entry == args->end() ? nullptr :
+        std::get_if<bool>(&live_entry->second);
+    const bool live = live_argument && *live_argument;
+    if (SunshineStreaming() != std::optional<bool>(live)) {
+      result->Error("privacy_streaming");
       return;
     }
     const auto mode_entry = args->find(flutter::EncodableValue("mode"));
@@ -218,8 +325,16 @@ void FlutterWindow::HandleTrayCall(
     const auto image_entry = args->find(flutter::EncodableValue("image"));
     const auto* image = image_entry == args->end() ? nullptr :
         std::get_if<std::string>(&image_entry->second);
-    const auto preview = privacy_screen_.ShowPreview(
-        GetHandle(), *mode == "image", image ? Utf16FromUtf8(*image) : L"");
+    const auto id_entry = args->find(flutter::EncodableValue("id"));
+    const auto* request_id = id_entry == args->end() ? nullptr :
+        std::get_if<int32_t>(&id_entry->second);
+    if (!request_id || *request_id <= 0) {
+      result->Error("privacy_arguments");
+      return;
+    }
+    const auto preview = privacy_screen_.Show(
+        GetHandle(), *mode == "image", image ? Utf16FromUtf8(*image) : L"",
+        live, *request_id);
     if (preview) {
       result->Success(flutter::EncodableValue(flutter::EncodableMap{
           {flutter::EncodableValue("imageFallback"),
@@ -230,6 +345,9 @@ void FlutterWindow::HandleTrayCall(
     } else {
       result->Error("privacy_preview");
     }
+  } else if (method == "renewPrivacyScreen") {
+    if (privacy_screen_.Renew()) result->Success();
+    else result->Error("privacy_lease");
   } else if (method == "hidePrivacyScreen") {
     privacy_screen_.Hide();
     result->Success();
@@ -237,7 +355,7 @@ void FlutterWindow::HandleTrayCall(
     auto icon = TrayIcon(GetHandle());
     icon.uFlags = NIF_INFO;
     icon.dwInfoFlags = NIIF_INFO;
-    wcscpy_s(icon.szInfoTitle, L"LULU Remote");
+    wcscpy_s(icon.szInfoTitle, L"\u5F3A\u54E5\u8FDC\u7A0B");
     wcscpy_s(icon.szInfo, L"\u6709\u8bbe\u5907\u6b63\u5728\u8bf7\u6c42\u8fde\u63a5");
     result->Success(flutter::EncodableValue(
         ::Shell_NotifyIconW(NIM_MODIFY, &icon) != FALSE));

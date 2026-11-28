@@ -157,20 +157,13 @@ Do not present any of these as working until the named test passes:
    only calls `moonlight-qt stream` / `quit` / `list`. If a future
    Moonlight release adds a headless pair mode, re-evaluate; do not
    assume the CLI pair path works.
-4. **Android Game Intent with LULU's own cert.** `MainActivity.kt`
-   implements two paths:
-   - (a) `ShortcutTrampoline` (UUID + AppId) — works only with
-     **Moonlight's own** pairing, so it is the fallback for devices
-     paired the old way. It cannot use LULU's cert.
-   - (b) Direct `Game` Intent with LULU's cert (`Host`, `Port`,
-     `HttpsPort`, `AppName`, `AppId`, `UUID`, `PcName`, `HDR`,
-     `ServerCert` DER bytes) — **unverified prototype**. The extra keys
-     come from the research report / DeepWiki on moonlight-vplus, not
-     from a run against Moonlight Android v12.2. Test on a real phone
-     with Moonlight Android installed: if the Game activity finishes
-     immediately, the AppId is wrong (read it from `/applist` after
-     pairing) or the cert is rejected — then the fallback is forking
-     Moonlight Android (whole fork GPL-3.0), which is out of v1 scope.
+4. **Android stream handoff.** Moonlight Android v12.2 declares `Game` as
+   internal. It uses its own client identity, and its `ServerCert` extra pins
+   the host certificate. The launcher opens Moonlight for the initial pairing
+   and copies the saved host address. Once paired in Moonlight, the public
+   `ShortcutTrampoline` accepts `UUID`, `AppName`, and optionally a string
+   `AppId`. The unified acceptance guide covers both entry points and checks
+   the resulting picture and input on a phone.
 5. **Sunshine `/api/pin` response shape.** `GET /api/pin` is used to
    find the pending `pairing_id`; the code handles a JSON array, a
    JSON object, and an empty response (POST without `pairing_id`).

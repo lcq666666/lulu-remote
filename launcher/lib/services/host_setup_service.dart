@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'moonlight_launcher.dart';
@@ -16,6 +17,7 @@ class HostSetupService {
       : _launcher = launcher ?? MoonlightLauncher();
 
   final MoonlightLauncher _launcher;
+  static const _androidChannel = MethodChannel('lulu.remote/launch');
 
   Future<List<SetupCheck>> runChecks() async {
     final checks = <SetupCheck>[];
@@ -31,7 +33,7 @@ class HostSetupService {
       ));
       checks.add(await _checkCommand(
         title: 'Tailscale 已安装',
-        command: 'tailscale',
+        command: _tailscaleCommand(),
         args: ['version'],
         fixUrl: Uri.parse('https://tailscale.com/download/windows'),
       ));
@@ -43,18 +45,7 @@ class HostSetupService {
         fixUrl: Uri.parse('https://www.zerotier.com/download/'),
       ));
     } else if (Platform.isAndroid) {
-      checks.add(SetupCheck(
-        title: 'Moonlight Android',
-        ok: false,
-        detail: '用于串流，请到 Play 商店确认已安装。',
-        fixUrl: Uri.parse('market://details?id=com.limelight'),
-      ));
-      checks.add(SetupCheck(
-        title: 'Tailscale',
-        ok: false,
-        detail: '用于组网，请到 Play 商店确认已安装。',
-        fixUrl: Uri.parse('market://details?id=com.tailscale.ipn'),
-      ));
+      return runAndroidChecks();
     } else {
       checks.add(const SetupCheck(
         title: 'Moonlight Android 已安装',
@@ -64,6 +55,48 @@ class HostSetupService {
       ));
     }
     return checks;
+  }
+
+  Future<List<SetupCheck>> runAndroidChecks() async {
+    Map<String, Object?>? apps;
+    try {
+      apps = await _androidChannel
+          .invokeMapMethod<String, Object?>('androidConnectionApps');
+    } on PlatformException {
+      // An unavailable query is not evidence an app is missing.
+    } on MissingPluginException {
+      // A development runner may not have the Android handler.
+    }
+    SetupCheck app(String key, String title, String packageName, String ready) {
+      final value = apps?[key];
+      final available = value is bool ? value : null;
+      return SetupCheck(
+        title: title,
+        ok: available,
+        detail: switch (available) {
+          true => ready,
+          false => '未找到可打开的应用，请安装或启用后重新检测。',
+          null => '暂时无法检测，可在系统设置里确认。',
+        },
+        fixUrl: Uri.parse('market://details?id=$packageName'),
+      );
+    }
+
+    return [
+      app('moonlight', 'Moonlight Android', 'com.limelight',
+          '可以打开 Moonlight；首次连接仍需配对。'),
+      app('tailscale', 'Tailscale', 'com.tailscale.ipn',
+          '可以打开 Tailscale；请在其中确认组网已连接。'),
+    ];
+  }
+
+  static String _tailscaleCommand() {
+    final programFiles = Platform.environment['ProgramFiles'];
+    if (programFiles != null) {
+      final installed = File('$programFiles\\Tailscale\\tailscale.exe');
+      if (installed.existsSync()) return installed.path;
+    }
+    return 'tailscale';
   }
 
   Future<SetupCheck> _checkCommand({

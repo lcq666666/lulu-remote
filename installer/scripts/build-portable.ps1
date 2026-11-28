@@ -1,6 +1,5 @@
-param([string]$Version = '0.3.0-beta.1')
-
 $ErrorActionPreference = 'Stop'
+$Version = & (Join-Path $PSScriptRoot 'read-app-version.ps1')
 $installer = Split-Path -Parent $PSScriptRoot
 $vendor = Join-Path $installer 'vendor'
 $dist = Join-Path $installer 'dist'

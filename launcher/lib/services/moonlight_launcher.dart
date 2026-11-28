@@ -10,6 +10,7 @@ import '../models/quality_preset.dart';
 /// Launches the stock Moonlight clients. LULU never renders video itself.
 class MoonlightLauncher {
   static const _channel = MethodChannel('lulu.remote/launch');
+  static const _windowsChannel = MethodChannel('lulu/host_tray');
 
   Future<bool> isInstalled() async {
     if (Platform.isWindows) return await findWindowsClient() != null;
@@ -54,6 +55,19 @@ class MoonlightLauncher {
     final known = await firstWorking([bundled, ..._installedCandidates]);
     if (known != null) return known;
 
+    // Stock MSI installations with a custom directory still have a shortcut.
+    // Use only the target and run the same --version probe as other clients.
+    try {
+      final links = await _windowsChannel
+          .invokeListMethod<String>('moonlightStartMenuTargets');
+      final registered = await firstWorking(links ?? const []);
+      if (registered != null) return registered;
+    } on PlatformException {
+      // Lookup is optional; PATH remains available.
+    } on MissingPluginException {
+      // A development runner may not yet have the Windows handler.
+    }
+
     final where = '${Platform.environment['SystemRoot'] ?? r'C:\Windows'}'
         r'\System32\where.exe';
     try {
@@ -79,60 +93,37 @@ class MoonlightLauncher {
     await client.quit(device);
   }
 
-  /// One-tap connect on Android.
-  ///
-  /// [useOwnCert] picks the Game Intent path (LULU's own pairing cert).
-  /// It is an UNVERIFIED prototype — see MainActivity.kt and BUILD.md §4.
-  /// When false, or when the Game Intent fails, call [launchShortcut]
-  /// instead (Moonlight's own pairing only).
-  Future<bool> streamAndroid(
-    Device device, {
-    required bool useOwnCert,
-    required List<int> serverCertDer,
-  }) async {
-    if (device.hostUuid == null || device.appId == null) {
-      throw const NotPairedException(
-        '缺少 UUID 或应用 ID，请先配对并读取应用列表。',
-      );
-    }
-    try {
-      final ok = await _channel.invokeMethod<bool>('launchGame', {
-        'host': device.meshAddress,
-        'port': device.sunshinePort,
-        'httpsPort': device.webPort - 6, // 47984 when base is 47989
-        'appName': device.appName,
-        'appId': device.appId,
-        'uuid': device.hostUuid,
-        'pcName': device.name,
-        'hdr': false,
-        'serverCert': serverCertDer,
-      });
-      return ok ?? false;
-    } on PlatformException catch (e) {
-      throw MoonlightLaunchException('拉起 Moonlight 失败：${e.message}');
-    }
-  }
+  Future<bool> openAndroid() async =>
+      await _channel.invokeMethod<bool>('openMoonlight') ?? false;
 
-  /// Fallback: ShortcutTrampoline Intent. Works only if this PC was
-  /// paired inside Moonlight itself (Moonlight's cert, not LULU's).
-  Future<bool> launchShortcut(Device device) async {
-    if (device.hostUuid == null || device.appId == null) {
-      throw const NotPairedException('缺少 UUID 或应用 ID。');
-    }
-    try {
-      final ok = await _channel.invokeMethod<bool>('launchShortcut', {
-        'uuid': device.hostUuid,
-        'appId': device.appId,
-      });
-      return ok ?? false;
-    } on PlatformException catch (e) {
-      throw MoonlightLaunchException('拉起 Moonlight 失败：${e.message}');
-    }
+  /// Moonlight resolves the host and uses its own pairing credentials.
+  /// A true return value indicates that Android accepted the launch request.
+  Future<bool> launchAndroidShortcut(Device device, String hostUuid) async {
+    final appId = device.appId;
+    return await _channel.invokeMethod<bool>('launchShortcut', {
+          'uuid': hostUuid,
+          'appName': device.appName,
+          if (appId != null && appId > 0) 'appId': appId,
+        }) ??
+        false;
   }
 }
 
 /// A single Moonlight executable and profile used throughout a connection.
 class WindowsMoonlight {
+  static const _streamChannel = MethodChannel('lulu/host_tray');
+
+  static Future<bool> switchMonitor(int pid, int screen,
+      {required bool focus}) async {
+    RangeError.checkValueInInterval(screen, 1, 12, 'screen');
+    return await _streamChannel.invokeMethod<bool>('switchStreamMonitor', {
+          'pid': pid,
+          'screen': screen,
+          'focus': focus,
+        }) ??
+        false;
+  }
+
   const WindowsMoonlight(this.executable, this.directory);
 
   final String executable;
@@ -240,13 +231,6 @@ Future<_CommandResult> _runCommand(
 
 class MoonlightNotInstalledException implements Exception {
   const MoonlightNotInstalledException(this.message);
-  final String message;
-  @override
-  String toString() => message;
-}
-
-class NotPairedException implements Exception {
-  const NotPairedException(this.message);
   final String message;
   @override
   String toString() => message;

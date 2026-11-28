@@ -3,18 +3,30 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../app.dart';
 import '../models/device.dart';
 import '../models/quality_preset.dart';
+import '../services/clipboard_sync_session.dart';
 import '../services/component_installer.dart';
 import '../services/device_store.dart';
+import '../services/file_transfer_host.dart';
+import '../services/file_transfer_service.dart';
+import '../services/host_tools_service.dart';
 import '../services/mesh_status_service.dart';
 import '../services/moonlight_launcher.dart';
+import '../services/power_service.dart';
 import '../services/secure_store.dart';
+import '../services/stream_screen_selection.dart';
+import '../services/wake_on_lan.dart';
 import '../widgets/device_card.dart';
+import '../widgets/host_tools.dart';
+import '../widgets/file_transfer_dialog.dart';
 import '../widgets/lulu_ui.dart';
+import '../widgets/power_settings.dart';
+import '../widgets/stream_screen_dialog.dart';
 import 'add_device_screen.dart';
 import 'pairing_screen.dart';
 import 'setup_checklist_screen.dart';
@@ -22,14 +34,27 @@ import 'this_computer_screen.dart';
 
 enum _HomeTab { connect, host, settings }
 
-typedef _HostCheck = ({HostStatus status, String detail, Duration elapsed});
+typedef _HostCheck = ({
+  HostStatus status,
+  String detail,
+  Duration elapsed,
+  String? hostUuid,
+});
+
+enum _AndroidConnectAction { open, shortcut, settings, store, pairingTest }
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen(
-      {super.key, required this.themeMode, required this.onThemeChanged});
+      {super.key,
+      required this.themeMode,
+      required this.onThemeChanged,
+      this.machineSuffix,
+      this.onResetActivation});
 
   final ThemeMode themeMode;
   final ValueChanged<ThemeMode> onThemeChanged;
+  final String? machineSuffix;
+  final VoidCallback? onResetActivation;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -45,6 +70,10 @@ class _HomeScreenState extends State<HomeScreen> {
   Map<String, _HostCheck> _status = {};
   QualityPreset _preset = QualityPreset.office1080;
   String? _connectingId;
+  final _waking = <String>{};
+  final _windowsStreams = <String, StreamScreenSelection>{};
+  ClipboardSyncSession? _clipboardSync;
+  String? _clipboardDeviceId;
   bool _loading = true;
   bool _saving = false;
   Timer? _statusTimer;
@@ -64,6 +93,11 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _statusTimer?.cancel();
+    for (final stream in _windowsStreams.values) {
+      stream.close();
+    }
+    _windowsStreams.clear();
+    _stopClipboardSync();
     super.dispose();
   }
 
@@ -95,45 +129,94 @@ class _HomeScreenState extends State<HomeScreen> {
     return (
       status: result.status,
       detail: result.detail,
-      elapsed: watch.elapsed
+      elapsed: watch.elapsed,
+      hostUuid: result.hostUuid,
     );
   }
 
-  Future<void> _checkConnection(Device device) async {
+  Future<void> _wake(Device device) async {
+    final mac = device.wakeMac;
+    if (mac == null || _busy || _waking.contains(device.id)) return;
+    setState(() => _waking.add(device.id));
+    final relay = device.wakeRelayAddress;
+    try {
+      if (relay == null) {
+        await WakeOnLan.send(mac);
+      } else {
+        if (!isPrivateTransferAddress(relay)) {
+          throw const HostToolsException('请检查转发电脑的组网 IPv4。');
+        }
+        final code = await askWakeRelayCode(context, relay);
+        if (!mounted || code == null) return;
+        await HostToolsClient(relay, code).wake(mac);
+        if (mounted) showLuluSnack(context, '转发电脑已发送唤醒包，正在等待上线。');
+      }
+      final result = await WakeOnLan.waitForSunshine(
+        probe: () =>
+            _mesh.check(device).then((status) => status == HostStatus.online),
+        cancelled: () => !mounted,
+      );
+      if (!mounted) return;
+      if (result == WakeResult.online) {
+        ++_statusRefresh;
+        final check = await _measureHostCheck(device);
+        if (!mounted) return;
+        setState(() => _status[device.id] = check);
+        showLuluSnack(
+            context,
+            check.status == HostStatus.online
+                ? '电脑已上线，可以连接。'
+                : '电脑有过响应，目前远程服务仍未就绪。');
+      } else if (result == WakeResult.timedOut) {
+        showLuluSnack(
+            context,
+            relay == null
+                ? WakeOnLan.timeoutMessage
+                : WakeOnLan.relayTimeoutMessage);
+      }
+    } on HostToolsException catch (error) {
+      if (mounted) showLuluSnack(context, '唤醒转发失败。${error.message}');
+    } on SocketException {
+      if (mounted) showLuluSnack(context, '唤醒包发送失败。请检查本机的局域网连接。');
+    } on FormatException {
+      if (mounted) showLuluSnack(context, '请在编辑电脑中检查有线网卡 MAC 地址。');
+    } finally {
+      if (mounted) setState(() => _waking.remove(device.id));
+    }
+  }
+
+  Future<_HostCheck> _checkConnection(Device device) async {
     ++_statusRefresh;
     var check = await _measureHostCheck(device);
     if (check.status != HostStatus.online && mounted) {
       await Future<void>.delayed(const Duration(seconds: 1));
-      if (!mounted) return;
+      if (!mounted) return check;
       check = await _measureHostCheck(device);
     }
-    if (!mounted) return;
+    if (!mounted) return check;
     setState(() => _status[device.id] = check);
     if (check.status != HostStatus.online) {
       throw MoonlightLaunchException(
         '连不上「${device.name}」（${device.meshAddress}:${device.sunshinePort}）。${check.detail}',
       );
     }
+    return check;
   }
 
-  Future<void> _connect(Device device, {bool androidShortcut = false}) async {
+  Future<void> _connect(Device device, {int? initialScreen}) async {
     if (_connectingId != null || _saving) return;
-    if (!Platform.isWindows && !device.paired) {
-      await _openPairing(device);
+    if (Platform.isAndroid) {
+      await _showAndroidHelp(device);
       return;
     }
     setState(() => _connectingId = device.id);
     try {
       if (Platform.isWindows) {
-        await _connectWindows(device);
-      } else if (Platform.isAndroid) {
-        await _connectAndroid(device, shortcut: androidShortcut);
+        await _connectWindows(device, initialScreen: initialScreen);
       } else {
         _snack('这个平台还不支持一键连接，请用 Windows 或安卓。');
       }
     } on MoonlightNotInstalledException catch (e) {
-      _snack(e.message);
-    } on NotPairedException catch (e) {
       _snack(e.message);
     } on MoonlightLaunchException catch (e) {
       _snack(e.message);
@@ -144,7 +227,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _connectWindows(Device device) async {
+  Future<void> _connectWindows(Device device, {int? initialScreen}) async {
     var client = await _launcher.findWindowsClient();
     if (!mounted) return;
     if (client == null) {
@@ -222,10 +305,104 @@ class _HomeScreenState extends State<HomeScreen> {
       throw MoonlightLaunchException(
           await _windowsExitMessage(earlyExit, stderr, error));
     }
+    if (!mounted) return;
+    final stream = StreamScreenSelection(
+      send: (screen, {required focus}) =>
+          WindowsMoonlight.switchMonitor(process.pid, screen, focus: focus),
+    );
+    _windowsStreams[device.id]?.close();
+    _windowsStreams[device.id] = stream;
     unawaited(exit.then((code) async {
+      stream.close();
+      if (_windowsStreams[device.id] == stream) {
+        _windowsStreams.remove(device.id);
+        if (_clipboardDeviceId == device.id) _stopClipboardSync();
+      }
       if (code != 0) _snack(await _windowsExitMessage(code, stderr, error));
     }));
+    if (initialScreen != null) {
+      unawaited(_selectStreamScreen(stream, initialScreen, initial: true));
+    }
   }
+
+  Future<void> _selectStreamScreen(StreamScreenSelection stream, int screen,
+      {required bool initial}) async {
+    final result = await stream.select(screen, initial: initial);
+    if (mounted && result == StreamScreenResult.unavailable) {
+      _snack('未能发送切换指令。请在 Moonlight 窗口按 Ctrl+Alt+Shift+F$screen。');
+    }
+  }
+
+  Future<void> _chooseStreamScreen(Device device) async {
+    if (_busy) return;
+    final stream = _windowsStreams[device.id];
+    final screen = await showDialog<int>(
+      context: context,
+      builder: (context) => StreamScreenDialog(streaming: stream != null),
+    );
+    if (!mounted || screen == null || _busy) return;
+    if (stream == null) {
+      await _connect(device, initialScreen: screen);
+      return;
+    }
+    if (_windowsStreams[device.id] != stream) {
+      _snack('串流已结束，请重新连接后再切换。');
+      return;
+    }
+    await _selectStreamScreen(stream, screen, initial: false);
+  }
+
+  void _stopClipboardSync() {
+    _clipboardSync?.stop();
+    _clipboardSync = null;
+    _clipboardDeviceId = null;
+  }
+
+  Future<void> _startClipboardSync(Device device, String code) async {
+    final stream = _windowsStreams[device.id];
+    if (!mounted ||
+        stream == null ||
+        !isPrivateTransferAddress(device.meshAddress)) {
+      throw const HostToolsException('请先用设备卡进入桌面，并检查电脑的组网地址。');
+    }
+    _stopClipboardSync();
+    final session = ClipboardSyncSession(
+      client: HostToolsClient(device.meshAddress, code),
+      readLocal: () async =>
+          (await Clipboard.getData(Clipboard.kTextPlain))?.text ?? '',
+      writeLocal: (text) => Clipboard.setData(ClipboardData(text: text)),
+      onError: (error) {
+        _stopClipboardSync();
+        _snack(error is HostToolsException ? error.message : '剪贴板同步已停止。');
+      },
+    );
+    _clipboardSync = session;
+    _clipboardDeviceId = device.id;
+    try {
+      await session.start();
+      if (!mounted ||
+          _clipboardSync != session ||
+          _windowsStreams[device.id] != stream) {
+        throw const HostToolsException('串流已结束。');
+      }
+      _snack('本次串流的文本剪贴板同步已开启。');
+    } catch (_) {
+      if (_clipboardSync == session) _stopClipboardSync();
+      rethrow;
+    }
+  }
+
+  Future<void> _showClipboard(Device device) => showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => HostToolsDialog(
+          device: device,
+          startSync: _windowsStreams.containsKey(device.id)
+              ? (code) => _startClipboardSync(device, code)
+              : null,
+          stopSync: _clipboardDeviceId == device.id ? _stopClipboardSync : null,
+        ),
+      );
 
   Future<String> _windowsExitMessage(
     int code,
@@ -237,10 +414,45 @@ class _HomeScreenState extends State<HomeScreen> {
     return message.isEmpty ? 'Moonlight 已退出（退出码 $code）。' : message;
   }
 
+  Future<void> _powerAction(Device device, PowerAction action) async {
+    if (!isPrivateTransferAddress(device.meshAddress)) {
+      showLuluSnack(context, '请使用被控电脑的组网 IPv4 地址。');
+      return;
+    }
+    final store = SecureStore();
+    var saved = '';
+    try {
+      saved = await store.readPowerCode(device.id) ?? '';
+    } on Exception {
+      // The operator can still enter the code manually.
+    }
+    if (!mounted) return;
+    final code = await showDialog<String>(
+        context: context,
+        builder: (_) => PowerConfirmation(
+            action: action, deviceName: device.name, code: saved));
+    if (code == null || !mounted) return;
+    try {
+      await const PowerClient().submit(
+          Uri(scheme: 'http', host: device.meshAddress, port: fileTransferPort),
+          code,
+          action);
+      if (mounted) showLuluSnack(context, '被控电脑已接收${action.label}请求。');
+      try {
+        await store.writePowerCode(device.id, code);
+      } on Exception {
+        // The command result is independent of saving the authorization.
+      }
+    } on FileTransferFailure catch (error) {
+      if (mounted) showLuluSnack(context, error.message);
+    }
+  }
+
   Future<void> _disconnectWindows(Device device) async {
     if (_connectingId != null || _saving) return;
     setState(() => _connectingId = device.id);
     try {
+      if (_clipboardDeviceId == device.id) _stopClipboardSync();
       await _launcher.quitWindows(device);
       _snack('已请求断开 ${device.name}。');
     } catch (e) {
@@ -250,52 +462,60 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _connectAndroid(Device device, {bool shortcut = false}) async {
-    await _checkConnection(device);
-    if (!mounted) return;
-    final serverCertHex = await _secureStore.readServerCertHex(device.id);
-    var opened = false;
-    if (!shortcut &&
-        serverCertHex != null &&
-        device.hostUuid != null &&
-        device.appId != null) {
-      try {
-        opened = await _launcher.streamAndroid(
-          device,
-          useOwnCert: true,
-          serverCertDer: _hexToBytes(serverCertHex),
-        );
-      } on MoonlightLaunchException {
-        // Try the shortcut for hosts already paired inside Moonlight.
+  Future<void> _connectAndroid(Device device, {required bool shortcut}) async {
+    if (_busy) return;
+    setState(() => _connectingId = device.id);
+    try {
+      if (!shortcut) {
+        await Clipboard.setData(
+            ClipboardData(text: WindowsMoonlight.endpoint(device)));
+        if (!mounted) return;
+        final opened = await _launcher.openAndroid();
+        _snack(opened
+            ? '已复制电脑地址。在 Moonlight 中添加或选择这台电脑。'
+            : '已复制电脑地址。请安装 Moonlight 后再连接。');
+        return;
       }
-    }
-    if (!opened && device.hostUuid != null && device.appId != null) {
-      try {
-        opened = await _launcher.launchShortcut(device);
-      } on MoonlightLaunchException {
-        // Show the same recovery instructions for either launch path.
+      final check = await _checkConnection(device);
+      if (!mounted) return;
+      final hostUuid = check.hostUuid;
+      if (hostUuid == null) {
+        _snack('无法识别这台电脑。请用「复制地址并打开 Moonlight」选择电脑。');
+        return;
       }
-    }
-    if (!mounted) return;
-    if (opened) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(
-          content: const Text('已请求打开 Moonlight，请在 Moonlight 中确认是否开始串流。'),
-          duration: const Duration(seconds: 12),
-          action: SnackBarAction(
-            label: '连接失败帮助',
-            onPressed: () => _showAndroidHelp(device),
-          ),
-        ));
-    } else {
-      unawaited(_showAndroidHelp(device));
+      if (device.hostUuid != null &&
+          device.hostUuid!.toLowerCase() != hostUuid.toLowerCase()) {
+        _snack('远程电脑的身份已变化。请在 Moonlight 中重新添加并配对。');
+        return;
+      }
+      final opened = await _launcher.launchAndroidShortcut(device, hostUuid);
+      if (!mounted) return;
+      if (opened) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(
+            content: const Text('已请求打开 Moonlight，请在 Moonlight 中确认是否开始串流。'),
+            duration: const Duration(seconds: 12),
+            action: SnackBarAction(
+              label: '连接失败帮助',
+              onPressed: () => _showAndroidHelp(device),
+            ),
+          ));
+      } else {
+        _snack('无法打开快捷连接。请用「复制地址并打开 Moonlight」连接。');
+      }
+    } on MoonlightLaunchException catch (e) {
+      _snack(e.message);
+    } on PlatformException {
+      _snack('打开 Moonlight 失败，请检查 Moonlight 是否已安装。');
+    } finally {
+      if (mounted) setState(() => _connectingId = null);
     }
   }
 
   Future<void> _showAndroidHelp(Device device) async {
-    if (!mounted) return;
-    final action = await showModalBottomSheet<String>(
+    if (!mounted || _busy) return;
+    final action = await showModalBottomSheet<_AndroidConnectAction>(
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
@@ -309,27 +529,36 @@ class _HomeScreenState extends State<HomeScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Text('Moonlight 退出或连接失败',
+                const Text('通过 Moonlight 连接',
                     style:
                         TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 8),
-                Text('${device.meshAddress}:${device.sunshinePort}',
+                Text(WindowsMoonlight.endpoint(device),
                     style: LuluTheme.mono.copyWith(color: theme.muted)),
                 const SizedBox(height: 8),
-                Text(
-                    '确认对方电脑已开启远程服务，两台设备使用同一局域网或组网。安卓端需要先在 Moonlight 中与对方配对，再返回 LULU 重试。',
+                Text('首次连接时，在 Moonlight 点「+」、粘贴地址并完成 PIN 配对。确认两台设备在同一局域网或组网内。',
                     style: TextStyle(color: theme.muted, fontSize: 13)),
                 const SizedBox(height: 16),
-                if (device.paired)
-                  FilledButton(
-                      onPressed: () => Navigator.pop(context, 'shortcut'),
-                      child: const Text('已在 Moonlight 配对，重试')),
+                FilledButton(
+                    onPressed: () =>
+                        Navigator.pop(context, _AndroidConnectAction.open),
+                    child: const Text('复制地址并打开 Moonlight')),
                 OutlinedButton(
-                    onPressed: () => Navigator.pop(context, 'settings'),
+                    onPressed: () =>
+                        Navigator.pop(context, _AndroidConnectAction.shortcut),
+                    child: const Text('已在 Moonlight 配对，尝试直连')),
+                TextButton(
+                    onPressed: () =>
+                        Navigator.pop(context, _AndroidConnectAction.settings),
                     child: const Text('前往连接设置检测')),
                 TextButton(
-                    onPressed: () => Navigator.pop(context, 'store'),
+                    onPressed: () =>
+                        Navigator.pop(context, _AndroidConnectAction.store),
                     child: const Text('Moonlight 商店页')),
+                TextButton(
+                    onPressed: () => Navigator.pop(
+                        context, _AndroidConnectAction.pairingTest),
+                    child: const Text('测试强哥远程配对伴侣')),
               ],
             ),
           ),
@@ -337,12 +566,19 @@ class _HomeScreenState extends State<HomeScreen> {
       },
     );
     if (!mounted) return;
-    if (action == 'shortcut') {
-      await _connect(device, androidShortcut: true);
-    } else if (action == 'settings') {
-      _selectTab(_HomeTab.settings);
-    } else if (action == 'store') {
-      await _openMoonlightStore();
+    switch (action) {
+      case _AndroidConnectAction.open:
+        await _connectAndroid(device, shortcut: false);
+      case _AndroidConnectAction.shortcut:
+        await _connectAndroid(device, shortcut: true);
+      case _AndroidConnectAction.settings:
+        _selectTab(_HomeTab.settings);
+      case _AndroidConnectAction.store:
+        await _openMoonlightStore();
+      case _AndroidConnectAction.pairingTest:
+        await _openPairing(device);
+      case null:
+        break;
     }
   }
 
@@ -360,14 +596,6 @@ class _HomeScreenState extends State<HomeScreen> {
     _snack('无法打开商店，请从手机应用列表打开 Moonlight。');
   }
 
-  static List<int> _hexToBytes(String hex) {
-    final out = <int>[];
-    for (var i = 0; i < hex.length; i += 2) {
-      out.add(int.parse(hex.substring(i, i + 2), radix: 16));
-    }
-    return out;
-  }
-
   Future<void> _openPairing(Device device) async {
     if (_saving || _connectingId != null) return;
     final updated = await _openDeviceForm(
@@ -379,8 +607,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _openAddDevice([Device? existing]) async {
     if (_saving || _connectingId != null) return;
-    final device = await _openDeviceForm(
-        (dialog) => AddDeviceScreen(device: existing, dialog: dialog));
+    final device = await _openDeviceForm((dialog) => AddDeviceScreen(
+          device: existing,
+          dialog: dialog,
+          savedAddresses: {for (final device in _devices) device.meshAddress},
+        ));
     if (!mounted || device == null) return;
     await _saveDeviceChange(() async {
       if (existing == null) {
@@ -492,7 +723,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ? null
             : AppBar(
                 title: Text(switch (_tab) {
-                  _HomeTab.connect => 'LULU 远程',
+                  _HomeTab.connect => '强哥远程',
                   _HomeTab.host => '让别人连接我',
                   _HomeTab.settings => '连接设置',
                 }),
@@ -687,30 +918,92 @@ class _HomeScreenState extends State<HomeScreen> {
                         windows && constraints.maxWidth >= 520 ? 2 : 1;
                     final width =
                         (constraints.maxWidth - (columns - 1) * 16) / columns;
-                    return Wrap(spacing: 16, runSpacing: 16, children: [
-                      for (final device in _devices)
-                        SizedBox(
-                            key: ValueKey(device.id),
-                            width: width,
-                            child: DeviceCard(
-                              device: device,
-                              status: _status[device.id]?.status,
-                              responseTime: _status[device.id]?.elapsed,
-                              statusDetail: _status[device.id]?.detail,
-                              connecting: _connectingId == device.id,
-                              mobile: !windows,
-                              busy: _busy,
-                              onConnect: () => _connect(device),
-                              onEdit: () => _openAddDevice(device),
-                              onDelete: () => _deleteDevice(device),
-                              onDisconnect: windows && device.paired
-                                  ? () => _disconnectWindows(device)
-                                  : null,
-                              onAndroidHelp: Platform.isAndroid
-                                  ? () => _showAndroidHelp(device)
-                                  : null,
-                            )),
-                    ]);
+                    final groups = <String, List<Device>>{};
+                    for (final device in _devices) {
+                      (groups[device.group] ??= []).add(device);
+                    }
+                    final showHeadings =
+                        groups.length > 1 || !groups.containsKey('');
+                    return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          for (final group in groups.entries) ...[
+                            if (showHeadings)
+                              Padding(
+                                padding:
+                                    const EdgeInsets.only(top: 8, bottom: 12),
+                                child: Text(
+                                    group.key.isEmpty ? '未分组' : group.key,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium),
+                              ),
+                            Wrap(spacing: 16, runSpacing: 16, children: [
+                              for (final device in group.value)
+                                SizedBox(
+                                    key: ValueKey(device.id),
+                                    width: width,
+                                    child: DeviceCard(
+                                      device: device,
+                                      status: _status[device.id]?.status,
+                                      responseTime: _status[device.id]?.elapsed,
+                                      statusDetail: _status[device.id]?.detail,
+                                      connecting: _connectingId == device.id,
+                                      mobile: !windows,
+                                      busy: _busy,
+                                      onConnect: () => _connect(device),
+                                      onStreamScreen: windows
+                                          ? () => _chooseStreamScreen(device)
+                                          : null,
+                                      connectLabel: Platform.isAndroid
+                                          ? '连接 Moonlight'
+                                          : null,
+                                      onWake: device.wakeMac == null
+                                          ? null
+                                          : () => _wake(device),
+                                      waking: _waking.contains(device.id),
+                                      onTransfer: () => showDialog<void>(
+                                        context: context,
+                                        barrierDismissible: false,
+                                        builder: (_) =>
+                                            FileTransferDialog(device: device),
+                                      ),
+                                      onHardware: () => showDialog<void>(
+                                          context: context,
+                                          barrierDismissible: false,
+                                          builder: (_) => HostToolsDialog(
+                                              device: device,
+                                              panel: HostToolPanel.hardware)),
+                                      onDiagnostics: () => showDialog<void>(
+                                          context: context,
+                                          barrierDismissible: false,
+                                          builder: (_) => HostToolsDialog(
+                                              device: device,
+                                              panel:
+                                                  HostToolPanel.diagnostics)),
+                                      onCommand: () => showDialog<void>(
+                                        context: context,
+                                        barrierDismissible: false,
+                                        builder: (_) => HostToolsDialog(
+                                            device: device,
+                                            panel: HostToolPanel.command),
+                                      ),
+                                      onClipboard: () => _showClipboard(device),
+                                      onPower: (action) =>
+                                          _powerAction(device, action),
+                                      onEdit: () => _openAddDevice(device),
+                                      onDelete: () => _deleteDevice(device),
+                                      onDisconnect: windows && device.paired
+                                          ? () => _disconnectWindows(device)
+                                          : null,
+                                      onAndroidHelp: Platform.isAndroid
+                                          ? () => _showAndroidHelp(device)
+                                          : null,
+                                    )),
+                            ]),
+                            const SizedBox(height: 12),
+                          ],
+                        ]);
                   }),
               ],
             ),
@@ -770,6 +1063,34 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _preferences(bool windows) => Card(
           child: Column(children: [
+        if (widget.machineSuffix != null &&
+            widget.onResetActivation != null) ...[
+          ListTile(
+            title: Text('已激活 · ${widget.machineSuffix}'),
+            subtitle: const Text('更换密钥 / 重新激活'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () async {
+              final confirmed = await showDialog<bool>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                        title: const Text('重新激活？'),
+                        content: const Text('会清除本机的激活记录。再次进入主界面需要一枚新密钥。'),
+                        actions: [
+                          TextButton(
+                              onPressed: () => Navigator.pop(context, false),
+                              child: const Text('取消')),
+                          FilledButton(
+                              onPressed: () => Navigator.pop(context, true),
+                              child: const Text('重新激活')),
+                        ],
+                      ));
+              if (mounted && confirmed == true) {
+                widget.onResetActivation?.call();
+              }
+            },
+          ),
+          const Divider(),
+        ],
         if (windows) ...[
           Padding(
               padding: const EdgeInsets.all(16),

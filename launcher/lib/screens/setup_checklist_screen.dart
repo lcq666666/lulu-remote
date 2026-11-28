@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -41,7 +42,8 @@ class SetupChecklistScreen extends StatefulWidget {
   State<SetupChecklistScreen> createState() => _SetupChecklistScreenState();
 }
 
-class _SetupChecklistScreenState extends State<SetupChecklistScreen> {
+class _SetupChecklistScreenState extends State<SetupChecklistScreen>
+    with WidgetsBindingObserver {
   final _service = HostSetupService();
   final _installer = ComponentInstaller();
   List<SetupCheck>? _checks;
@@ -53,7 +55,19 @@ class _SetupChecklistScreenState extends State<SetupChecklistScreen> {
   @override
   void initState() {
     super.initState();
+    if (Platform.isAndroid) WidgetsBinding.instance.addObserver(this);
     _run();
+  }
+
+  @override
+  void dispose() {
+    if (Platform.isAndroid) WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) unawaited(_run());
   }
 
   Future<void> _run() async {
@@ -82,7 +96,7 @@ class _SetupChecklistScreenState extends State<SetupChecklistScreen> {
       if (!mounted) return;
       setState(() => _installResult = result);
       await _run();
-      if (mounted) showLuluSnack(context, '安装已完成，可查看每项结果。');
+      if (mounted) showLuluSnack(context, '已更新组件检查结果，可查看每项详情。');
     } catch (_) {
       if (mounted) setState(() => _installResult = '安装未完成，请重试。');
     } finally {
@@ -266,8 +280,12 @@ class _SetupChecklistScreenState extends State<SetupChecklistScreen> {
 
   Widget _checkRow(SetupCheck check, LuluTheme theme, bool android) {
     final (label, icon, color) = switch (check.ok) {
-      true => ('正常', Icons.check_circle_outline, theme.success),
-      false when android => ('待确认', Icons.info_outline, theme.muted),
+      true => (
+          android ? '可打开' : '正常',
+          Icons.check_circle_outline,
+          theme.success
+        ),
+      false when android => ('需安装或启用', Icons.error_outline, theme.warning),
       false => (
           check.optional ? '未安装' : '需安装',
           Icons.error_outline,

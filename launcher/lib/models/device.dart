@@ -19,6 +19,10 @@ class Device {
     this.hostUuid,
     this.paired = false,
     this.lastSeen,
+    this.wakeMac,
+    this.wakeRelayAddress,
+    this.group = '',
+    this.nickname = '',
   });
 
   factory Device.fromJson(Map<String, dynamic> json) => Device(
@@ -35,6 +39,10 @@ class Device {
         appId: json['appId'] as int?,
         hostUuid: json['hostUuid'] as String?,
         paired: json['paired'] as bool? ?? false,
+        wakeMac: json['wakeMac'] as String?,
+        wakeRelayAddress: json['wakeRelayAddress'] as String?,
+        group: (json['group'] as String? ?? '').trim(),
+        nickname: (json['nickname'] as String? ?? '').trim(),
         lastSeen: json['lastSeen'] == null
             ? null
             : DateTime.tryParse(json['lastSeen'] as String),
@@ -56,13 +64,18 @@ class Device {
   /// App to stream, by name for moonlight-qt (`stream <host> "Desktop"`).
   String appName;
 
-  /// Numeric app id from /applist, resolved after pairing. Needed for the
-  /// Android Game Intent; null until pairing has fetched the applist.
+  /// Numeric app id from /applist, when available after in-app pairing.
   int? appId;
 
-  /// Host UUID from /serverinfo, resolved after pairing. Needed for the
-  /// Android Game Intent and for ShortcutTrampoline.
+  /// Host UUID recorded during in-app pairing, when available.
   String? hostUuid;
+
+  final String? wakeMac;
+  final String? wakeRelayAddress;
+  final String group;
+  final String nickname;
+
+  String get displayName => nickname.isEmpty ? name : nickname;
 
   bool paired;
   DateTime? lastSeen;
@@ -88,6 +101,10 @@ class Device {
         'appId': appId,
         'hostUuid': hostUuid,
         'paired': paired,
+        if (wakeMac != null) 'wakeMac': wakeMac,
+        if (wakeRelayAddress != null) 'wakeRelayAddress': wakeRelayAddress,
+        if (group.isNotEmpty) 'group': group,
+        if (nickname.isNotEmpty) 'nickname': nickname,
         'lastSeen': lastSeen?.toIso8601String(),
       };
 
@@ -103,6 +120,10 @@ class Device {
         hostUuid: hostUuid ?? this.hostUuid,
         paired: paired ?? this.paired,
         lastSeen: lastSeen,
+        wakeMac: wakeMac,
+        wakeRelayAddress: wakeRelayAddress,
+        group: group,
+        nickname: nickname,
       );
 }
 

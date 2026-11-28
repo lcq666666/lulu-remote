@@ -4,15 +4,46 @@
 #include <wincodec.h>
 #include <wrl/client.h>
 
+#include <algorithm>
 #include <cstdint>
+#include <iterator>
 
 namespace {
 using Microsoft::WRL::ComPtr;
 constexpr wchar_t kPreviewClass[] = L"LuluRemotePrivacyPreview";
 constexpr UINT_PTR kPreviewTimer = 1;
 constexpr UINT kPreviewMilliseconds = 12000;
+constexpr UINT kLiveLeaseMilliseconds = 8000;
+constexpr UINT kDismissLiveMessage = WM_APP + 1;
+
+bool HasCaptureExclusion() {
+  OSVERSIONINFOEXW version{};
+  version.dwOSVersionInfoSize = sizeof(version);
+  version.dwMajorVersion = 10;
+  version.dwMinorVersion = 0;
+  version.dwBuildNumber = 19041;
+  const auto conditions = VerSetConditionMask(
+      VerSetConditionMask(VerSetConditionMask(0, VER_MAJORVERSION, VER_GREATER_EQUAL),
+                          VER_MINORVERSION, VER_GREATER_EQUAL),
+      VER_BUILDNUMBER, VER_GREATER_EQUAL);
+  return VerifyVersionInfoW(&version, VER_MAJORVERSION | VER_MINORVERSION |
+                                          VER_BUILDNUMBER, conditions) != FALSE;
+}
 constexpr int kExitHotkey = 1;
 constexpr int kCloseButton = 2;
+
+RECT VirtualScreenBounds() {
+  const int x = GetSystemMetrics(SM_XVIRTUALSCREEN);
+  const int y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+  return {x, y, x + GetSystemMetrics(SM_CXVIRTUALSCREEN),
+                y + GetSystemMetrics(SM_CYVIRTUALSCREEN)};
+}
+
+bool CoversBounds(HWND window, const RECT& expected) {
+  RECT actual{};
+  return expected.right > expected.left && expected.bottom > expected.top &&
+         GetWindowRect(window, &actual) && EqualRect(&actual, &expected);
+}
 
 bool ReadImage(const std::wstring& path, SIZE* size, HBITMAP* bitmap) {
   if (path.empty()) return false;
@@ -100,9 +131,17 @@ PrivacyImagePick PickPrivacyImage(HWND owner, PrivacyImageFile* selected) {
 
 PrivacyScreen::~PrivacyScreen() { Hide(); }
 
-std::optional<PrivacyPreview> PrivacyScreen::ShowPreview(HWND owner, bool use_image,
-                                                const std::wstring& path) {
-  if (window_) return std::nullopt;
+PrivacyScreen* PrivacyScreen::input_owner_ = nullptr;
+
+std::optional<PrivacyPreview> PrivacyScreen::Show(HWND owner, bool use_image,
+                                                  const std::wstring& path,
+                                                  bool live, int request_id) {
+  // Live retries reuse their session ID so a delayed Dart notification
+  // cannot reopen a curtain the local user explicitly dismissed.
+  if (window_ || (live && (request_id == dismissed_live_id_ ||
+                           !HasCaptureExclusion()))) {
+    return std::nullopt;
+  }
   const auto instance = GetModuleHandleW(nullptr);
   WNDCLASSEXW klass{};
   klass.cbSize = sizeof(klass);
@@ -114,8 +153,9 @@ std::optional<PrivacyPreview> PrivacyScreen::ShowPreview(HWND owner, bool use_im
     return std::nullopt;
   }
   const bool fallback = use_image && !ReadImage(path, &image_size_, &bitmap_);
-  window_ = CreateWindowExW(WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
-                            kPreviewClass, L"LULU Privacy Screen Preview",
+  DWORD style = WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW;
+  if (live) style |= WS_EX_LAYERED | WS_EX_TRANSPARENT;
+  window_ = CreateWindowExW(style, kPreviewClass, L"LULU Privacy Screen",
                             WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, instance, this);
   if (!window_) {
     Hide();
@@ -123,26 +163,114 @@ std::optional<PrivacyPreview> PrivacyScreen::ShowPreview(HWND owner, bool use_im
   }
   hotkey_registered_ = RegisterHotKey(
       window_, kExitHotkey, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'P') != FALSE;
-  close_button_ = CreateWindowExW(
-      0, L"BUTTON", hotkey_registered_ ? L"\u5173\u95ed\u9884\u89c8 (Ctrl+Alt+P)"
-                                       : L"\u5173\u95ed\u9884\u89c8",
-      WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, window_,
-      reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCloseButton)), instance,
-      nullptr);
-  if (!close_button_ ||
-      !SetTimer(window_, kPreviewTimer, kPreviewMilliseconds, nullptr)) {
+  live_ = live;
+  if (live) {
+    if (!PrepareLive(instance)) {
+      Hide();
+      return std::nullopt;
+    }
+  } else {
+    close_button_ = CreateWindowExW(
+        0, L"BUTTON", hotkey_registered_ ? L"\u5173\u95ed\u9884\u89c8 (Ctrl+Alt+P)"
+                                         : L"\u5173\u95ed\u9884\u89c8",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, window_,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCloseButton)), instance,
+        nullptr);
+    if (!close_button_ ||
+        !SetTimer(window_, kPreviewTimer, kPreviewMilliseconds, nullptr)) {
+      Hide();
+      return std::nullopt;
+    }
+    SendMessageW(close_button_, WM_SETFONT,
+                 reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+  }
+  if (!Layout() || (live && !Renew())) {
     Hide();
     return std::nullopt;
   }
-  SendMessageW(close_button_, WM_SETFONT,
-               reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
-  owner_ = owner;
-  Layout();
   ShowWindow(window_, SW_SHOWNOACTIVATE);
-  return PrivacyPreview{fallback, hotkey_registered_};
+  if (!IsWindowVisible(window_)) {
+    Hide();
+    return std::nullopt;
+  }
+  owner_ = owner;
+  request_id_ = request_id;
+  return PrivacyPreview{fallback, live || hotkey_registered_};
+}
+
+bool PrivacyScreen::PrepareLive(HINSTANCE instance) {
+  DWORD affinity = WDA_NONE;
+  if (input_owner_ ||
+      !SetLayeredWindowAttributes(window_, 0, 255, LWA_ALPHA) ||
+      !SetWindowDisplayAffinity(window_, WDA_EXCLUDEFROMCAPTURE) ||
+      !GetWindowDisplayAffinity(window_, &affinity) ||
+      affinity != WDA_EXCLUDEFROMCAPTURE) {
+    return false;
+  }
+  // Capture sees the desktop below the click-through curtain. Physical
+  // input is suppressed while Windows permits injected remote input through.
+  // The keyboard hook can dismiss the curtain even if the global hotkey is busy.
+  for (int key : {VK_LCONTROL, VK_RCONTROL, VK_LMENU, VK_RMENU}) {
+    physical_keys_[key] = (GetAsyncKeyState(key) & 0x8000) != 0;
+  }
+  input_owner_ = this;
+  keyboard_hook_ = SetWindowsHookExW(WH_KEYBOARD_LL, KeyboardHook, instance, 0);
+  mouse_hook_ = SetWindowsHookExW(WH_MOUSE_LL, MouseHook, instance, 0);
+  return keyboard_hook_ && mouse_hook_;
+}
+
+bool PrivacyScreen::Renew() {
+  if (!window_ || !live_) return false;
+  // Recheck the current virtual desktop even if Windows did not deliver a
+  // display-change message (e.g. the desktop was rearranged between polls).
+  if ((!CoversBounds(window_, VirtualScreenBounds()) && !Layout()) ||
+      !SetTimer(window_, kPreviewTimer, kLiveLeaseMilliseconds, nullptr)) {
+    Hide();  // A failed renewal is not a user dismissal.
+    return false;
+  }
+  return true;
+}
+
+LRESULT CALLBACK PrivacyScreen::KeyboardHook(int code, WPARAM wparam,
+                                              LPARAM lparam) {
+  auto* curtain = input_owner_;
+  if (code == HC_ACTION && curtain) {
+    const auto* input = reinterpret_cast<const KBDLLHOOKSTRUCT*>(lparam);
+    if (!(input->flags & LLKHF_INJECTED)) {
+      const bool down = !(input->flags & LLKHF_UP);
+      if (input->vkCode < std::size(curtain->physical_keys_)) {
+        curtain->physical_keys_[input->vkCode] = down;
+      }
+      const auto& keys = curtain->physical_keys_;
+      if (down && input->vkCode == 'P' &&
+          (keys[VK_LCONTROL] || keys[VK_RCONTROL]) &&
+          (keys[VK_LMENU] || keys[VK_RMENU])) {
+        PostMessageW(curtain->window_, kDismissLiveMessage, 0, 0);
+      }
+      return 1;
+    }
+  }
+  return CallNextHookEx(nullptr, code, wparam, lparam);
+}
+
+LRESULT CALLBACK PrivacyScreen::MouseHook(int code, WPARAM wparam, LPARAM lparam) {
+  if (code == HC_ACTION && input_owner_) {
+    const auto* input = reinterpret_cast<const MSLLHOOKSTRUCT*>(lparam);
+    if (!(input->flags & LLMHF_INJECTED)) return 1;
+  }
+  return CallNextHookEx(nullptr, code, wparam, lparam);
 }
 
 void PrivacyScreen::Hide(bool notify) {
+  if (input_owner_ == this) {
+    input_owner_ = nullptr;
+    if (keyboard_hook_) UnhookWindowsHookEx(keyboard_hook_);
+    if (mouse_hook_) UnhookWindowsHookEx(mouse_hook_);
+    keyboard_hook_ = nullptr;
+    mouse_hook_ = nullptr;
+    std::fill(std::begin(physical_keys_), std::end(physical_keys_), false);
+  }
+  live_ = false;
   if (window_) {
     if (hotkey_registered_) UnregisterHotKey(window_, kExitHotkey);
     hotkey_registered_ = false;
@@ -155,25 +283,39 @@ void PrivacyScreen::Hide(bool notify) {
     DeleteObject(bitmap_);
     bitmap_ = nullptr;
   }
-  if (owner_) {
-    if (notify) PostMessageW(owner_, kDismissedMessage, 0, 0);
-    owner_ = nullptr;
+  if (owner_ && notify) {
+    PostMessageW(owner_, kDismissedMessage, static_cast<WPARAM>(request_id_), 0);
   }
+  owner_ = nullptr;
+  request_id_ = 0;
 }
 
-void PrivacyScreen::Layout() {
-  const int x = GetSystemMetrics(SM_XVIRTUALSCREEN);
-  const int y = GetSystemMetrics(SM_YVIRTUALSCREEN);
-  SetWindowPos(window_, HWND_TOPMOST, x, y,
-               GetSystemMetrics(SM_CXVIRTUALSCREEN),
-               GetSystemMetrics(SM_CYVIRTUALSCREEN), SWP_NOACTIVATE);
+void PrivacyScreen::DismissByUser() {
+  if (live_) dismissed_live_id_ = request_id_;
+  Hide(true);
+}
+
+bool PrivacyScreen::Layout() {
+  const auto bounds = VirtualScreenBounds();
+  const int width_px = bounds.right - bounds.left;
+  const int height_px = bounds.bottom - bounds.top;
+  if (width_px <= 0 || height_px <= 0 ||
+      !SetWindowPos(window_, HWND_TOPMOST, bounds.left, bounds.top,
+                    width_px, height_px, SWP_NOACTIVATE) ||
+      !CoversBounds(window_, bounds)) {
+    return false;
+  }
   const UINT dpi = GetDpiForWindow(window_);
   const int width = MulDiv(180, dpi, 96);
   const int height = MulDiv(32, dpi, 96);
   // Screen coordinates (0, 0) are the primary monitor's top-left corner.
   const int margin = MulDiv(16, dpi, 96);
-  MoveWindow(close_button_, margin - x, margin - y, width, height, TRUE);
+  if (close_button_) {
+    MoveWindow(close_button_, margin - bounds.left, margin - bounds.top,
+               width, height, TRUE);
+  }
   InvalidateRect(window_, nullptr, FALSE);
+  return true;
 }
 
 LRESULT CALLBACK PrivacyScreen::WindowProc(HWND window, UINT message,
@@ -197,13 +339,18 @@ LRESULT PrivacyScreen::HandleMessage(UINT message, WPARAM wparam, LPARAM lparam)
     case WM_CLOSE:
       return 0;
     case WM_DISPLAYCHANGE:
-      Layout();
+      if (!Layout()) Hide(!live_);
+      return 0;
+    case kDismissLiveMessage:
+      if (live_) DismissByUser();
       return 0;
     case WM_HOTKEY:
-      if (wparam == kExitHotkey) Hide(true);
+      if (wparam == kExitHotkey) DismissByUser();
       return 0;
     case WM_TIMER:
-      if (wparam == kPreviewTimer) Hide(true);
+      // Only preview timers notify Dart. A live lease timeout is not a
+      // user dismissal: a later confirmed-active poll may show it again.
+      if (wparam == kPreviewTimer) Hide(!live_);
       return 0;
     case WM_COMMAND:
       if (LOWORD(wparam) == kCloseButton && HIWORD(wparam) == BN_CLICKED) Hide(true);

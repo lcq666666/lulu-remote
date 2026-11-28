@@ -1,17 +1,29 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../app.dart';
 import '../models/device.dart';
+import '../services/file_transfer_host.dart';
 import '../services/mesh_status_service.dart';
+import '../services/wake_on_lan.dart';
 import '../widgets/lulu_ui.dart';
 
 /// Add a host: name + mesh address. No password is asked here — the
 /// Sunshine admin password is entered on the pairing screen, once.
 class AddDeviceScreen extends StatefulWidget {
-  const AddDeviceScreen({super.key, this.device, this.dialog = false});
+  const AddDeviceScreen({
+    super.key,
+    this.device,
+    this.dialog = false,
+    this.savedAddresses = const {},
+    this.findComputers,
+  });
 
   final Device? device;
   final bool dialog;
+  final Set<String> savedAddresses;
+  final Future<List<MeshComputer>> Function()? findComputers;
 
   @override
   State<AddDeviceScreen> createState() => _AddDeviceScreenState();
@@ -27,15 +39,78 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
       TextEditingController(text: '${widget.device?.webPort ?? 47990}');
   late final _appController =
       TextEditingController(text: widget.device?.appName ?? 'Desktop');
+  late final _wakeMacController =
+      TextEditingController(text: widget.device?.wakeMac);
+  late final _wakeRelayController =
+      TextEditingController(text: widget.device?.wakeRelayAddress);
+  late final _groupController =
+      TextEditingController(text: widget.device?.group);
+  late final _nicknameController =
+      TextEditingController(text: widget.device?.nickname);
   late NetworkKind _network = widget.device?.network ?? NetworkKind.tailscale;
   String? _error;
 
   bool _saving = false;
+  bool _discovering = false;
+  String? _discoveryInfo;
+  List<MeshComputer> _computers = const [];
+
+  Future<void> _discover() async {
+    setState(() {
+      _discovering = true;
+      _discoveryInfo = null;
+      _computers = const [];
+    });
+    try {
+      final found = await (widget.findComputers?.call() ??
+          MeshStatusService().discoverTailscaleComputers(
+              savedAddresses: widget.savedAddresses));
+      if (!mounted) return;
+      setState(() {
+        _computers = found;
+        if (found.isEmpty) {
+          _discoveryInfo = '没找到可添加的电脑。请确认对方开启了远程控制，或手动填写地址。';
+        }
+      });
+    } on Exception {
+      if (!mounted) return;
+      setState(() => _discoveryInfo = '无法读取 Tailscale 设备。请确认已登录组网，或手动填写地址。');
+    } finally {
+      if (mounted) setState(() => _discovering = false);
+    }
+  }
+
+  void _selectComputer(MeshComputer computer) {
+    setState(() {
+      _nameController.text = computer.name;
+      _addressController.text = computer.address;
+      _sunshinePortController.text = '47989';
+      _webPortController.text = '47990';
+      _network = NetworkKind.tailscale;
+      _error = null;
+      _computers = const [];
+      _discoveryInfo = '已填入地址，请确认后保存。';
+    });
+  }
 
   Future<void> _save() async {
     final name = _nameController.text.trim();
     final address = _addressController.text.trim();
     final appName = _appController.text.trim();
+    final macText = _wakeMacController.text.trim();
+    final wakeMac = WakeOnLan.normalizeMac(macText);
+    if (macText.isNotEmpty && wakeMac == null) {
+      setState(() => _error = '请填写有效的有线网卡 MAC 地址，例如 00:11:22:33:44:55。');
+      return;
+    }
+    final relay = _wakeRelayController.text.trim();
+    if (relay.isNotEmpty &&
+        (wakeMac == null ||
+            !isPrivateTransferAddress(relay) ||
+            relay == address)) {
+      setState(() => _error = '请填写目标电脑的 MAC 和另一台常开 Windows 的组网 IPv4。');
+      return;
+    }
     final sunshinePort = int.tryParse(_sunshinePortController.text.trim());
     final webPort = int.tryParse(_webPortController.text.trim());
     if (address.isEmpty || appName.isEmpty) {
@@ -60,6 +135,10 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
     try {
       final local = await mesh.localAddresses();
       if (!mounted) return;
+      if (relay.isNotEmpty && mesh.isLocalAddress(relay, local)) {
+        setState(() => _error = '本机发送唤醒包时，留空转发电脑地址。');
+        return;
+      }
       if (mesh.isLocalAddress(address, local)) {
         setState(() => _error = MeshStatusService.selfAddressMessage);
         return;
@@ -88,6 +167,10 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
         paired: sameApp && existing.paired,
         appId: sameApp ? existing.appId : null,
         hostUuid: sameHost ? existing.hostUuid : null,
+        wakeMac: wakeMac,
+        wakeRelayAddress: relay.isEmpty ? null : relay,
+        group: _groupController.text.trim(),
+        nickname: _nicknameController.text.trim(),
         lastSeen: sameHost ? existing.lastSeen : null,
       ),
     );
@@ -100,6 +183,10 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
     _sunshinePortController.dispose();
     _webPortController.dispose();
     _appController.dispose();
+    _wakeMacController.dispose();
+    _wakeRelayController.dispose();
+    _groupController.dispose();
+    _nicknameController.dispose();
     super.dispose();
   }
 
@@ -127,11 +214,49 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
       icon: Icons.desktop_windows_outlined,
       dialog: widget.dialog,
       children: [
+        if (widget.device == null &&
+            (Platform.isWindows || widget.findComputers != null)) ...[
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              onPressed: _saving || _discovering ? null : _discover,
+              icon: const Icon(Icons.search),
+              label: Text(_discovering ? '正在查找…' : '发现 Tailscale 电脑'),
+            ),
+          ),
+          const Text('仅检查本组网中已知的在线设备和默认端口。没有结果时可手动添加。'),
+          for (final computer in _computers)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(computer.name),
+              subtitle: Text(computer.address, style: LuluTheme.mono),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: _saving ? null : () => _selectComputer(computer),
+            ),
+          if (_discoveryInfo case final info?) Text(info),
+          const SizedBox(height: 12),
+        ],
         TextField(
           controller: _nameController,
           enabled: !_saving,
           decoration: const InputDecoration(
               labelText: '电脑名称（选填）', hintText: '例如：实验室主机'),
+        ),
+        const SizedBox(height: 16),
+        TextField(
+          controller: _nicknameController,
+          enabled: !_saving,
+          maxLength: 40,
+          decoration:
+              const InputDecoration(labelText: '显示备注名（选填）', counterText: ''),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _groupController,
+          enabled: !_saving,
+          maxLength: 40,
+          decoration: const InputDecoration(
+              labelText: '分组（选填）', hintText: '例如：课题组', counterText: ''),
         ),
         const SizedBox(height: 16),
         LayoutBuilder(builder: (context, constraints) {
@@ -182,6 +307,30 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
               enabled: !_saving,
               decoration: const InputDecoration(labelText: '应用名'),
             ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _wakeMacController,
+              enabled: !_saving,
+              autocorrect: false,
+              style: LuluTheme.mono,
+              decoration: const InputDecoration(
+                labelText: '有线网卡 MAC 地址（远程开机，选填）',
+                hintText: '00:11:22:33:44:55',
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _wakeRelayController,
+              enabled: !_saving,
+              autocorrect: false,
+              style: LuluTheme.mono,
+              decoration: const InputDecoration(
+                labelText: '唤醒转发电脑的组网 IPv4（选填）',
+                hintText: '100.64.10.20',
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(WakeOnLan.help, style: TextStyle(fontSize: 12)),
           ],
         ),
         if (_error != null) ...[

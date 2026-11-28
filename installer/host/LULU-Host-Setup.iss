@@ -13,18 +13,20 @@
 ;
 ; Build: CI only (see .github/workflows/build.yml):
 ;   1. installer\scripts\fetch-components.ps1   (fills installer\vendor\)
-;   2. iscc installer\host\LULU-Host-Setup.iss
+;   2. installer\scripts\build-installers.ps1
 ;
 
-#define AppVersion "0.3.0-beta.1"
+#ifndef AppVersion
+  #error Build using installer/scripts/build-installers.ps1
+#endif
 
 [Setup]
 AppId={{8D4E3B2C-5F6A-4E7B-8C9D-2F3E4A5B6C7D}
-AppName=LULU Remote Host
+AppName=强哥远程主机
 AppVersion={#AppVersion}
-AppPublisher=LULU Remote
+AppPublisher=强哥远程
 DefaultDirName={autopf}\LULU Remote Host
-DefaultGroupName=LULU Remote Host
+DefaultGroupName=强哥远程主机
 PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -33,7 +35,7 @@ OutputBaseFilename=LULU-Host-Setup-{#AppVersion}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-UninstallDisplayName=LULU Remote Host
+UninstallDisplayName=强哥远程主机
 LicenseFile=..\licenses\LULU-LICENSE.txt
 ; The installer is unsigned in v1 — Windows SmartScreen will warn on
 ; first run. A code-signing certificate is the only fix for that.
@@ -63,37 +65,17 @@ Source: "..\vendor\MANIFEST.md"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "LULU Remote Host"; ValueData: """{app}\lulu_remote.exe"" --tray"; Flags: uninsdeletevalue
 
 [Icons]
-Name: "{group}\LULU Remote"; Filename: "{app}\lulu_remote.exe"
+Name: "{group}\强哥远程"; Filename: "{app}\lulu_remote.exe"
 Name: "{group}\Sunshine"; Filename: "{autopf}\Sunshine\sunshine.exe"
-Name: "{group}\{cm:UninstallProgram,LULU Remote Host}"; Filename: "{uninstallexe}"
+Name: "{group}\{cm:UninstallProgram,强哥远程主机}"; Filename: "{uninstallexe}"
 
 [Code]
-procedure RunHostStep(const FileName, Params, Step: String; AllowRestart: Boolean);
-var
-  ResultCode: Integer;
-begin
-  if not Exec(FileName, Params, ExpandConstant('{app}'), SW_HIDE,
-      ewWaitUntilTerminated, ResultCode) then
-    RaiseException(Step + ' could not start. Windows error ' + IntToStr(ResultCode) + '.');
-  if (ResultCode <> 0) and not (AllowRestart and (ResultCode = 3010)) then
-    RaiseException(Step + ' failed. Exit code ' + IntToStr(ResultCode) + '.');
-end;
+#include "host-component-checks.iss"
 
-procedure CurStepChanged(CurStep: TSetupStep);
-var
-  PowerShell: String;
+function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
-  if CurStep <> ssPostInstall then Exit;
-  PowerShell := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
-  if not FileExists(ExpandConstant('{autopf}\Sunshine\sunshine.exe')) then
-    RunHostStep(ExpandConstant('{sys}\msiexec.exe'),
-      '/i "' + ExpandConstant('{app}\vendor\Sunshine-Windows-AMD64-installer.msi') + '" /qn /norestart',
-      'Sunshine installation', True);
-  if not FileExists(ExpandConstant('{autopf}\Tailscale\tailscale.exe')) then
-    RunHostStep(PowerShell, '-NoProfile -ExecutionPolicy Bypass -File "' +
-      ExpandConstant('{app}\vendor\install-tailscale.ps1') + '"', 'Tailscale installation', False);
-  RunHostStep(PowerShell, '-NoProfile -ExecutionPolicy Bypass -File "' +
-    ExpandConstant('{app}\vendor\finalize-host.ps1') + '"', 'Sunshine startup and readiness check', False);
+  Result := PrepareHostComponents(
+    not FileExists(ExpandConstant('{autopf}\Sunshine\sunshine.exe')), NeedsRestart);
 end;
 
 [Run]

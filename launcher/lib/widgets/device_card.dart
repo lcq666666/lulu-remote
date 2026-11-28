@@ -3,9 +3,23 @@ import 'package:flutter/material.dart';
 import '../app.dart';
 import '../models/device.dart';
 import '../services/mesh_status_service.dart';
+import '../services/power_service.dart';
 import 'lulu_ui.dart';
 
-enum _DeviceAction { edit, delete, help }
+enum _DeviceAction {
+  transfer,
+  clipboard,
+  diagnostics,
+  streamScreen,
+  command,
+  hardware,
+  edit,
+  delete,
+  help,
+  restart,
+  shutdown,
+  signOut
+}
 
 class DeviceCard extends StatefulWidget {
   const DeviceCard(
@@ -16,8 +30,18 @@ class DeviceCard extends StatefulWidget {
       this.statusDetail,
       required this.connecting,
       required this.onConnect,
+      this.connectLabel,
       this.mobile = false,
       this.busy = false,
+      this.onTransfer,
+      this.onClipboard,
+      this.onDiagnostics,
+      this.onStreamScreen,
+      this.onCommand,
+      this.onHardware,
+      this.onWake,
+      this.waking = false,
+      this.onPower,
       this.onEdit,
       this.onDelete,
       this.onDisconnect,
@@ -31,6 +55,16 @@ class DeviceCard extends StatefulWidget {
   final bool mobile;
   final bool busy;
   final VoidCallback onConnect;
+  final String? connectLabel;
+  final VoidCallback? onTransfer;
+  final VoidCallback? onClipboard;
+  final VoidCallback? onDiagnostics;
+  final VoidCallback? onStreamScreen;
+  final VoidCallback? onCommand;
+  final VoidCallback? onHardware;
+  final VoidCallback? onWake;
+  final bool waking;
+  final ValueChanged<PowerAction>? onPower;
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
   final VoidCallback? onDisconnect;
@@ -48,6 +82,24 @@ class _DeviceCardState extends State<DeviceCard> {
 
   void _runAction(_DeviceAction action) {
     switch (action) {
+      case _DeviceAction.restart:
+        widget.onPower?.call(PowerAction.restart);
+      case _DeviceAction.shutdown:
+        widget.onPower?.call(PowerAction.shutdown);
+      case _DeviceAction.signOut:
+        widget.onPower?.call(PowerAction.signOut);
+      case _DeviceAction.transfer:
+        widget.onTransfer?.call();
+      case _DeviceAction.hardware:
+        widget.onHardware?.call();
+      case _DeviceAction.diagnostics:
+        widget.onDiagnostics?.call();
+      case _DeviceAction.streamScreen:
+        widget.onStreamScreen?.call();
+      case _DeviceAction.command:
+        widget.onCommand?.call();
+      case _DeviceAction.clipboard:
+        widget.onClipboard?.call();
       case _DeviceAction.edit:
         widget.onEdit?.call();
       case _DeviceAction.delete:
@@ -87,6 +139,41 @@ class _DeviceCardState extends State<DeviceCard> {
                           ]),
                     ),
                     const Divider(),
+                    if (widget.onTransfer != null)
+                      ListTile(
+                        leading: const Icon(Icons.upload_file_outlined),
+                        title: const Text('发送文件'),
+                        onTap: () =>
+                            Navigator.pop(context, _DeviceAction.transfer),
+                      ),
+                    if (widget.onHardware != null)
+                      ListTile(
+                        leading: const Icon(Icons.memory_outlined),
+                        title: const Text('硬件信息'),
+                        onTap: () =>
+                            Navigator.pop(context, _DeviceAction.hardware),
+                      ),
+                    if (widget.onDiagnostics != null)
+                      ListTile(
+                        leading: const Icon(Icons.monitor_heart_outlined),
+                        title: const Text('连接诊断'),
+                        onTap: () =>
+                            Navigator.pop(context, _DeviceAction.diagnostics),
+                      ),
+                    if (widget.onCommand != null)
+                      ListTile(
+                        leading: const Icon(Icons.terminal),
+                        title: const Text('远程命令'),
+                        onTap: () =>
+                            Navigator.pop(context, _DeviceAction.command),
+                      ),
+                    if (widget.onClipboard != null)
+                      ListTile(
+                        leading: const Icon(Icons.content_paste_outlined),
+                        title: const Text('文本剪贴板'),
+                        onTap: () =>
+                            Navigator.pop(context, _DeviceAction.clipboard),
+                      ),
                     if (widget.onEdit != null)
                       ListTile(
                           leading: const Icon(Icons.edit_outlined),
@@ -99,6 +186,14 @@ class _DeviceCardState extends State<DeviceCard> {
                           title: const Text('连接遇到问题'),
                           onTap: () =>
                               Navigator.pop(context, _DeviceAction.help)),
+                    if (widget.onPower != null)
+                      for (final action in PowerAction.values)
+                        ListTile(
+                          leading: const Icon(Icons.power_settings_new),
+                          title: Text(action.label),
+                          onTap: () => Navigator.pop(context,
+                              _DeviceAction.values.byName(action.name)),
+                        ),
                     if (widget.onDelete != null)
                       ListTile(
                           iconColor: error,
@@ -124,7 +219,10 @@ class _DeviceCardState extends State<DeviceCard> {
     final error = Theme.of(context).colorScheme.error;
     final mobile = widget.mobile;
     final online = widget.status == HostStatus.online;
-    final busy = widget.busy || widget.connecting;
+    final offline = widget.status == HostStatus.offline ||
+        widget.status == HostStatus.unreachable;
+    final busy = widget.busy || widget.connecting || widget.waking;
+    final canWake = widget.onWake != null && widget.status != null && !online;
     final responseTime = widget.responseTime;
     final statusDetail = widget.statusDetail;
     final statusColor = switch (widget.status) {
@@ -133,7 +231,7 @@ class _DeviceCardState extends State<DeviceCard> {
       _ => theme.muted,
     };
     final primary = FilledButton(
-      onPressed: busy ? null : widget.onConnect,
+      onPressed: busy ? null : (canWake ? widget.onWake : widget.onConnect),
       style: FilledButton.styleFrom(
         minimumSize: Size(0, mobile ? 44 : 38),
         shape: mobile ? const StadiumBorder() : null,
@@ -147,7 +245,7 @@ class _DeviceCardState extends State<DeviceCard> {
           mainAxisAlignment: MainAxisAlignment.center,
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (widget.connecting) ...[
+            if (widget.connecting || widget.waking) ...[
               SizedBox.square(
                   dimension: 14,
                   child: CircularProgressIndicator(
@@ -156,15 +254,25 @@ class _DeviceCardState extends State<DeviceCard> {
             ],
             Flexible(
                 child: Text(
-                    widget.connecting
-                        ? '连接中…'
-                        : widget.device.paired
-                            ? '进入桌面'
-                            : '首次连接',
+                    widget.waking
+                        ? '等待开机…'
+                        : widget.connecting
+                            ? '连接中…'
+                            : canWake
+                                ? '开机'
+                                : widget.connectLabel ??
+                                    (widget.device.paired ? '进入桌面' : '首次连接'),
                     textAlign: TextAlign.center)),
           ]),
     );
-    final actions = widget.onEdit != null ||
+    final actions = widget.onPower != null ||
+        widget.onTransfer != null ||
+        widget.onClipboard != null ||
+        widget.onDiagnostics != null ||
+        widget.onStreamScreen != null ||
+        widget.onCommand != null ||
+        widget.onHardware != null ||
+        widget.onEdit != null ||
         widget.onDelete != null ||
         widget.onAndroidHelp != null;
     return MouseRegion(
@@ -183,10 +291,11 @@ class _DeviceCardState extends State<DeviceCard> {
             Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           Row(children: [
             Expanded(
-                child: Text(widget.device.name,
+                child: Text(widget.device.displayName,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
+                        color: offline ? theme.muted : null,
                         fontSize: mobile ? 17 : 16,
                         fontWeight: FontWeight.w600))),
             if (mobile)
@@ -202,9 +311,35 @@ class _DeviceCardState extends State<DeviceCard> {
                 icon: const Icon(Icons.more_horiz, size: 19),
                 onSelected: _runAction,
                 itemBuilder: (_) => [
+                  if (widget.onTransfer != null)
+                    const PopupMenuItem(
+                        value: _DeviceAction.transfer, child: Text('发送文件')),
+                  if (widget.onHardware != null)
+                    const PopupMenuItem(
+                        value: _DeviceAction.hardware, child: Text('硬件信息')),
+                  if (widget.onStreamScreen != null)
+                    const PopupMenuItem(
+                        value: _DeviceAction.streamScreen,
+                        child: Text('选择被控屏幕')),
+                  if (widget.onDiagnostics != null)
+                    const PopupMenuItem(
+                        value: _DeviceAction.diagnostics, child: Text('连接诊断')),
+                  if (widget.onCommand != null)
+                    const PopupMenuItem(
+                        value: _DeviceAction.command, child: Text('远程命令')),
+                  if (widget.onClipboard != null)
+                    const PopupMenuItem(
+                        value: _DeviceAction.clipboard, child: Text('文本剪贴板')),
                   if (widget.onEdit != null)
                     const PopupMenuItem(
                         value: _DeviceAction.edit, child: Text('编辑')),
+                  if (widget.onPower != null) ...[
+                    const PopupMenuDivider(),
+                    for (final action in PowerAction.values)
+                      PopupMenuItem(
+                          value: _DeviceAction.values.byName(action.name),
+                          child: Text(action.label)),
+                  ],
                   if (widget.onDelete != null)
                     PopupMenuItem(
                         value: _DeviceAction.delete,
@@ -262,6 +397,11 @@ class _DeviceCardState extends State<DeviceCard> {
             ])
           else
             primary,
+          if (canWake && !widget.waking)
+            TextButton(
+              onPressed: busy ? null : widget.onConnect,
+              child: const Text('直接尝试连接'),
+            ),
         ]),
       ),
     );

@@ -11,8 +11,11 @@
     <uses-permission android:name="com.lulu.remote.permission.PAIRING_WORKER" />
 
     <application
-        android:label="LULU 远程"
+        android:label="强哥远程"
         android:name="${applicationName}"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/device_data_rules"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"
@@ -34,10 +37,10 @@
             android:value="2" />
     </application>
 
-    <!-- Moonlight Android must be installed separately (com.limelight).
-         LULU launches it via Intent; it does not embed it. -->
+    <!-- Only the companion apps used by the launcher are visible. -->
     <queries>
         <package android:name="com.limelight" />
+        <package android:name="com.tailscale.ipn" />
         <package android:name="com.lulu.remote.pairing" />
     </queries>
 </manifest>

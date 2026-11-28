@@ -55,9 +55,87 @@ jobs:
           dart analyze lib bin test
           dart test
 
+  activation-server:
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.activation.outputs.enabled }}
+      public-key: ${{ steps.activation.outputs.public_key }}
+      server-url: ${{ steps.activation.outputs.server_url }}
+      version: ${{ steps.activation.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: server/go.sum
+      - name: Test activation server
+        working-directory: server
+        run: go test -count=1 ./...
+      - name: Test launcher against Go server
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.22.x'
+      - name: Cross-check the activation protocol
+        run: |
+          (cd server && go build -trimpath -o "$RUNNER_TEMP/lulu-auth-test" .)
+          cd launcher
+          flutter pub get
+          LULU_AUTH_TEST_EXE="$RUNNER_TEMP/lulu-auth-test" flutter test test/activation_integration_test.dart
+      - name: Check activation package configuration
+        id: activation
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.LULU_ACTIVATION_PREVIEW_PUBLIC_KEY != '')
+        env:
+          RELEASE_PUBLIC_KEY: ${{ vars.LULU_ACTIVATION_PUBLIC_KEY }}
+          RELEASE_SERVER_URL: ${{ vars.LULU_ACTIVATION_SERVER }}
+          PREVIEW_PUBLIC_KEY: ${{ vars.LULU_ACTIVATION_PREVIEW_PUBLIC_KEY }}
+          PREVIEW_SERVER_URL: ${{ vars.LULU_ACTIVATION_PREVIEW_SERVER }}
+        run: |
+          python3 - <<'PY'
+          import base64, ipaddress, os, pathlib, re, urllib.parse
+          release = os.environ['GITHUB_REF'].startswith('refs/tags/v')
+          prefix = 'RELEASE' if release else 'PREVIEW'
+          key = os.environ[prefix + '_PUBLIC_KEY']
+          url = os.environ[prefix + '_SERVER_URL']
+          if not re.fullmatch(r'https?://[0-9.]+:[0-9]+/?', url):
+              raise SystemExit('Set the activation group URL to an IPv4 address with an explicit port.')
+          address = urllib.parse.urlsplit(url)
+          if not re.fullmatch(r'[A-Za-z0-9_-]{43}', key) or len(base64.urlsafe_b64decode(key+'=')) != 32:
+              raise SystemExit('Set LULU_ACTIVATION_PUBLIC_KEY to the output of lulu-auth init.')
+          ip = ipaddress.IPv4Address(address.hostname or '')
+          if (address.scheme not in ('http', 'https') or not address.port or address.username is not None
+              or address.path not in ('', '/') or address.query or address.fragment
+              or not any(ip in ipaddress.IPv4Network(net) for net in ('100.64.0.0/10', '10.0.0.0/8'))):
+              raise SystemExit('Set LULU_ACTIVATION_SERVER to the overlay IPv4 HTTP URL, including its port.')
+          pubspec = pathlib.Path('launcher/pubspec.yaml').read_text(encoding='utf-8')
+          match = re.search(r'^version: ([0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.]+)?)\+\d+$', pubspec, re.M)
+          if not match or (release and os.environ['GITHUB_REF_NAME'] != 'v' + match[1]):
+              raise SystemExit('Invalid launcher version or mismatched release tag.')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              print(f'enabled=true\npublic_key={key}\nserver_url={url}\nversion={match[1]}', file=output)
+          PY
+      - name: Build Windows server and keygen
+        if: steps.activation.outputs.enabled == 'true'
+        working-directory: server
+        env:
+          VERSION: ${{ steps.activation.outputs.version }}
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: '0'
+        run: |
+          go build -trimpath -o "dist/lulu-auth-$VERSION-windows-x64.exe" .
+          cp "dist/lulu-auth-$VERSION-windows-x64.exe" "dist/lulu-keygen-$VERSION-windows-x64.exe"
+      - name: Upload server and keygen
+        if: steps.activation.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: activation-server
+          path: server/dist/*.exe
+          if-no-files-found: error
+
   # --- 2. Windows: one installer for both roles -------------------------
   build-windows:
-    needs: test
+    needs: [test, activation-server]
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -67,10 +145,18 @@ jobs:
           flutter-version: '3.22.x'
       - name: Build launcher (Windows)
         working-directory: launcher
+        env:
+          ACTIVATION_ENABLED: ${{ needs.activation-server.outputs.enabled }}
+          PUBLIC_KEY: ${{ needs.activation-server.outputs.public-key }}
+          ACTIVATION_SERVER: ${{ needs.activation-server.outputs.server-url }}
         run: |
           flutter create --platforms=windows --project-name=lulu_remote .
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          flutter build windows --release
+          $activation = @()
+          if ($env:ACTIVATION_ENABLED -eq 'true') {
+            $activation = @('--dart-define=LULU_ACTIVATION_REQUIRED=true', "--dart-define=LULU_ACTIVATION_PUBLIC_KEY=$env:PUBLIC_KEY", "--dart-define=LULU_ACTIVATION_SERVER=$env:ACTIVATION_SERVER")
+          }
+          flutter build windows --release @activation
       - name: Build and stage the Windows pairing worker
         shell: pwsh
         run: ./installer/scripts/build-pairing-worker.ps1
@@ -83,6 +169,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Set-Location ../pairing_worker
           dart test test/worker_process_test.dart
+      - name: Test Moonlight shortcut discovery on Windows
+        shell: pwsh
+        run: ./launcher/test/native/test-moonlight-shortcut.ps1
       - name: Fetch Moonlight + Sunshine (verify hashes, fetch LICENSEs)
         shell: pwsh
         run: ./installer/scripts/fetch-components.ps1
@@ -95,10 +184,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $language = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/Languages/ChineseSimplified.isl'
           Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/jrsoftware/issrc/is-6_7_1/Files/Languages/Unofficial/ChineseSimplified.isl' -OutFile $language
-      - name: Build LULU Windows installer
-        run: iscc installer\client\LULU-Remote-Setup.iss
-      - name: Build LULU Windows host installer
-        run: iscc installer\host\LULU-Host-Setup.iss
+      - name: Build Windows installers
+        run: ./installer/scripts/build-installers.ps1
+      - name: Check installer failure and clean client install
+        shell: pwsh
+        run: ./installer/tests/test-installer-results.ps1 -TestClientInstaller
       - name: Build portable Windows ZIP
         run: ./installer/scripts/build-portable.ps1
       - name: Upload Windows packages
@@ -114,7 +204,7 @@ jobs:
 
   # --- 3. Android: APK ----------------------------------------------------
   build-android:
-    needs: test
+    needs: [test, activation-server]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -133,6 +223,9 @@ jobs:
         run: |
           if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
             echo "configured=true" >> "$GITHUB_OUTPUT"
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo '::error::Configure the Android release keystore before publishing a version.'
+            exit 1
           else
             echo "configured=false" >> "$GITHUB_OUTPUT"
           fi
@@ -150,6 +243,10 @@ jobs:
         run: |
           umask 077
           key_file="$RUNNER_TEMP/lulu-release.keystore"
+          if [[ -z "$ANDROID_KEYSTORE_PASSWORD" || -z "$ANDROID_KEY_PASSWORD" || -z "$ANDROID_KEY_ALIAS" ]]; then
+            echo '::error::The Android release keystore alias and passwords are mandatory.'
+            exit 1
+          fi
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$key_file"
           for app in launcher pairing_worker/android_app; do
             cat > "$app/android/key.properties" <<EOF
@@ -167,6 +264,9 @@ jobs:
       - name: Build matching Android APKs
         env:
           HAS_RELEASE_KEY: ${{ steps.keystore.outputs.configured }}
+          ACTIVATION_ENABLED: ${{ needs.activation-server.outputs.enabled }}
+          PUBLIC_KEY: ${{ needs.activation-server.outputs.public-key }}
+          ACTIVATION_SERVER: ${{ needs.activation-server.outputs.server-url }}
         run: |
           mode=debug
           if [ "$HAS_RELEASE_KEY" = true ]; then
@@ -177,13 +277,39 @@ jobs:
               -storepass android -keypass android -alias androiddebugkey \
               -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Android Debug,O=Android,C=US'
           fi
-          for app in launcher pairing_worker/android_app; do
-            (cd "$app" && flutter pub get && flutter build apk "--$mode")
-          done
+          activation=()
+          if [[ "$ACTIVATION_ENABLED" == true ]]; then
+            activation+=("--dart-define=LULU_ACTIVATION_REQUIRED=true"
+              "--dart-define=LULU_ACTIVATION_PUBLIC_KEY=$PUBLIC_KEY"
+              "--dart-define=LULU_ACTIVATION_SERVER=$ACTIVATION_SERVER")
+          fi
+          (cd launcher && flutter pub get && flutter build apk "--$mode" "${activation[@]}")
+          (cd pairing_worker/android_app && flutter pub get && flutter build apk "--$mode")
           mkdir -p android-dist
           cp "launcher/build/app/outputs/flutter-apk/app-$mode.apk" "android-dist/LULU-Remote-$mode.apk"
           cp "pairing_worker/android_app/build/app/outputs/flutter-apk/app-$mode.apk" "android-dist/LULU-Pairing-Worker-$mode.apk"
-          git archive --format=zip --output=android-dist/LULU-Pairing-Worker-Source.zip HEAD pairing_worker installer/scripts/build-pairing-worker.ps1 .github/workflows/build.yml
+          git archive --format=zip --output=android-dist/LULU-Pairing-Worker-Source.zip HEAD pairing_worker launcher/pubspec.yaml installer/scripts/build-pairing-worker.ps1 .github/workflows/build.yml
+      - name: Verify Android package versions
+        run: |
+          version="$(sed -nE 's/^version: ([0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.]+)?\+[0-9]+)$/\1/p' launcher/pubspec.yaml)"
+          if [[ -z "$version" ]]; then exit 1; fi
+          aapt="$(find "$ANDROID_HOME/build-tools" -name aapt | sort -V | tail -n 1)"
+          verify_package() {
+            local info expected
+            info="$("$aapt" dump badging "$1")" || return 1
+            expected="package: name='$2' versionCode='${version##*+}' versionName='${version%+*}'"
+            if [[ "${info%%$'\n'*}" != "$expected" && "${info%%$'\n'*}" != "$expected "* ]]; then
+              echo "::error::Unexpected package name or version in $1"
+              return 1
+            fi
+          }
+          verify_package android-dist/LULU-Remote-*.apk com.lulu.remote
+          verify_package android-dist/LULU-Pairing-Worker-*.apk com.lulu.remote.pairing
+      - name: Verify Android backup policy in the launcher APK
+        run: |
+          aapt2="$(find "$ANDROID_HOME/build-tools" -name aapt2 | sort -V | tail -n 1)"
+          python3 launcher/test/native/test_android_backup_policy.py
+          python3 launcher/test/native/test_android_backup_policy.py --apk "$aapt2" android-dist/LULU-Remote-*.apk
       - name: Verify matching Android signatures
         run: |
           apksigner="$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)"
@@ -208,7 +334,7 @@ jobs:
 
   # --- 4. Release (tags only) ---------------------------------------------
   release:
-    needs: [build-windows, build-android]
+    needs: [build-windows, build-android, activation-server]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
@@ -222,14 +348,20 @@ jobs:
             dist/windows-installers/dist/*.exe
             dist/windows-installers/dist/*.zip
             dist/android-apk/*.apk
+            dist/activation-server/*.exe
             dist/android-apk/LULU-Pairing-Worker-Source.zip
             dist/windows-installers/vendor/MANIFEST.md
           body: |
+            ### 在线激活
+
+            本版首次联网激活需要作者发放的一次性密钥。激活后，已激活设备仍可离线启动。
+            作者在激活服务器上运行 `lulu-auth-*-windows-x64.exe init` 初始化，运行 `serve --listen 组网IP:8765` 启动服务。使用 `lulu-keygen-*-windows-x64.exe keys generate --count 20 --note 实验室` 生成密钥。部署与备份见 `server/README.md`。
+
             ### Windows 连接修复
 
             - 直接从 LULU 的设备卡进入桌面。首次配对会用已保存的地址打开 Moonlight 的 PIN 窗口，无需到 Moonlight 首页重新添加或输入地址。
             - LULU 先检查随包和系统安装的 Moonlight 是否能运行，必要时在应用内准备组件。设备卡显示连接端口或组网相关的错误原因。
-            - F01 提供被控端本机黑屏和图片预览。F02 提供远程结束后自动锁屏开关，双机串流断开仍待验收。
+            - F01 提供被控端串流隐私屏和本机预览。F02 提供远程结束后自动锁屏开关，已通过双机验收。
 
             两台电脑都可以用 `LULU-Remote-Setup-*.exe` 覆盖同类型安装。安装前先从托盘退出正在运行的 LULU。用 `LULU-Host-Setup-*.exe` 部署专用主机时，会配置登录后自动运行托盘。便携 ZIP 需解压整个文件夹，再打开 `lulu_remote.exe`。
 
@@ -237,7 +369,7 @@ jobs:
 
             ### Android
 
-            安装同一次构建提供的 `LULU-Remote-*.apk` 和 `LULU-Pairing-Worker-*.apk`。以 `debug` 结尾的 APK 使用调试签名。手机仍需安装 Moonlight，并按原有安卓流程配对。
+            安装同一次构建提供的 `LULU-Remote-release.apk` 和 `LULU-Pairing-Worker-release.apk`。如果已安装旧版调试 APK，先记录设备信息，再卸载旧的两个 APK，并重新安装。手机仍需安装 Moonlight。
 
             组件版本、校验值和许可信息见 `MANIFEST.md`。
           fail_on_unmatched_files: true

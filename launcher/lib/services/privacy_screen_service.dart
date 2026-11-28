@@ -38,8 +38,7 @@ class PrivacySettings {
 typedef PrivacyImage = ({String path, int width, int height});
 typedef PrivacyPreview = ({bool imageFallback, bool hotkeyAvailable});
 
-/// Owns the state of the Windows privacy-screen preview. Live masking is not
-/// enabled until capture exclusion and remote input work on the stock host.
+/// Keeps the preview and the tray-driven curtain in sync with the runner.
 class PrivacyScreenService {
   PrivacyScreenService({
     MethodChannel channel = const MethodChannel('lulu/host_tray'),
@@ -49,34 +48,124 @@ class PrivacyScreenService {
   final MethodChannel _channel;
   final _streaming = ValueNotifier<bool?>(null);
   final _previewing = ValueNotifier<bool>(false);
+  final _liveImageFallback = ValueNotifier<bool>(false);
   bool _polling = false;
+  PrivacySettings? _sessionSettings;
+  int? _sessionCurtainId;
+  bool _sessionDismissed = false;
+  bool _live = false;
+  int _generation = 0;
+  int _nextCurtainId = 0;
+  int? _curtainId;
+  Future<void> _curtainWork = Future.value();
 
   ValueListenable<bool?> get streaming => _streaming;
   ValueListenable<bool> get previewing => _previewing;
+  ValueListenable<bool> get liveImageFallback => _liveImageFallback;
+
+  // Run preview, polling and shutdown in the same order as their requests.
+  Future<T> _queueCurtain<T>(Future<T> Function() action) {
+    final result = _curtainWork.then((_) => action());
+    _curtainWork =
+        result.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    return result;
+  }
+
+  Future<void> stop() {
+    final generation = ++_generation;
+    return _queueCurtain(() async {
+      _resetSession();
+      _streaming.value = null;
+      await _syncCurtain(null, generation);
+    });
+  }
+
+  Future<Map<String, bool>?> _show(PrivacySettings settings,
+      {required bool live, required int id}) async {
+    _curtainId = id;
+    _live = live;
+    try {
+      final result = await _channel.invokeMapMethod<String, bool>(
+        'showPrivacyScreen',
+        {
+          'mode': settings.mode.name,
+          'image': settings.imagePath,
+          'live': live,
+          'id': id,
+        },
+      );
+      if (_curtainId == id) {
+        _previewing.value = !live;
+        _liveImageFallback.value = live && (result?['imageFallback'] ?? false);
+      }
+      return result;
+    } catch (_) {
+      if (_curtainId == id) _clearCurtain();
+      rethrow;
+    }
+  }
+
+  Future<void> _hide() async {
+    _clearCurtain();
+    await _channel.invokeMethod<void>('hidePrivacyScreen');
+  }
+
+  Future<void> _syncCurtain(bool? active, int generation) async {
+    try {
+      if (active != true) {
+        if (active == false) _resetSession();
+        if (_live || _previewing.value && active == null) await _hide();
+        return;
+      }
+      if (_previewing.value) await _hide();
+      // Retain the settings and request ID for the entire session, including
+      // a failed sample or a failed native live check. The next confirmed
+      // active sample can restore the curtain without applying new settings.
+      final settings = _sessionSettings ??= await PrivacySettings.load();
+      if (generation != _generation ||
+          settings.mode == PrivacyMode.off ||
+          _sessionDismissed) return;
+      if (_live) {
+        await _channel.invokeMethod<void>('renewPrivacyScreen');
+        return;
+      }
+      await _show(settings,
+          live: true, id: _sessionCurtainId ??= ++_nextCurtainId);
+    } on Exception {
+      // A failed renewal expires natively. Retry only after an active sample.
+      if (generation == _generation && _live) _clearCurtain();
+    } on StateError {
+      if (generation == _generation && _live) _clearCurtain();
+    }
+  }
+
+  void _resetSession() {
+    _sessionSettings = null;
+    _sessionCurtainId = null;
+    _sessionDismissed = false;
+  }
 
   Future<void> poll({Future<void> Function(bool?)? onSample}) async {
     if (_polling) return;
     _polling = true;
+    final generation = _generation;
     try {
-      bool? active;
-      try {
-        active = await _channel.invokeMethod<bool>('sunshineStreaming');
-      } on PlatformException {
-        // Leave an unsuccessful sample unknown, not idle.
-      } on MissingPluginException {
-        // E.g. a launcher binary predating this channel method.
-      }
-      _streaming.value = active;
-      if (active != false && _previewing.value) {
+      final active = await _queueCurtain(() async {
+        if (generation != _generation) return null;
+        bool? sample;
         try {
-          await closePreview();
+          sample = await _channel.invokeMethod<bool>('sunshineStreaming');
         } on PlatformException {
-          // The runner's timer is the fallback if closing fails.
+          // Leave an unsuccessful sample unknown, not idle.
         } on MissingPluginException {
-          // No runner API available.
+          // E.g. a launcher binary predating this channel method.
         }
-      }
-      if (onSample != null) await onSample(active);
+        if (generation != _generation) return null;
+        _streaming.value = sample;
+        await _syncCurtain(sample, generation);
+        return sample;
+      });
+      if (generation == _generation && onSample != null) await onSample(active);
     } finally {
       _polling = false;
     }
@@ -93,31 +182,38 @@ class PrivacyScreenService {
     );
   }
 
-  Future<PrivacyPreview> preview(PrivacySettings settings) async {
-    if (settings.mode == PrivacyMode.off) {
-      throw StateError('请先选择黑屏或自定义图片。');
-    }
-    // Query again rather than relying on a sample from the previous tick.
-    if (await _channel.invokeMethod<bool>('sunshineStreaming') != false) {
-      throw StateError('串流正在进行或状态未知，暂不能预览。');
-    }
-    final result =
-        await _channel.invokeMapMethod<String, bool>('showPrivacyScreen', {
-      'mode': settings.mode.name,
-      'image': settings.imagePath,
+  Future<PrivacyPreview> preview(PrivacySettings settings) {
+    final generation = _generation;
+    return _queueCurtain(() async {
+      if (settings.mode == PrivacyMode.off) {
+        throw StateError('请先选择黑屏或自定义图片。');
+      }
+      // Query again rather than relying on a sample from the previous tick.
+      if (await _channel.invokeMethod<bool>('sunshineStreaming') != false ||
+          generation != _generation) {
+        throw StateError('串流正在进行或状态未知，暂不能预览。');
+      }
+      final result = await _show(settings, live: false, id: ++_nextCurtainId);
+      return (
+        imageFallback: result?['imageFallback'] ?? false,
+        hotkeyAvailable: result?['hotkeyAvailable'] ?? false,
+      );
     });
-    _previewing.value = true;
-    return (
-      imageFallback: result?['imageFallback'] ?? false,
-      hotkeyAvailable: result?['hotkeyAvailable'] ?? false,
-    );
   }
 
-  Future<void> closePreview() async {
-    if (!_previewing.value) return;
-    await _channel.invokeMethod<void>('hidePrivacyScreen');
-    previewClosed();
+  Future<void> closePreview() => _queueCurtain(() async {
+        if (_previewing.value) await _hide();
+      });
+
+  void dismissed(int id) {
+    if (_sessionCurtainId == id) _sessionDismissed = true;
+    if (_curtainId == id) _clearCurtain();
   }
 
-  void previewClosed() => _previewing.value = false;
+  void _clearCurtain() {
+    _curtainId = null;
+    _previewing.value = false;
+    _live = false;
+    _liveImageFallback.value = false;
+  }
 }
