@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -28,6 +29,61 @@ void main() {
     expect(record.duration, const Duration(minutes: 2));
     expect(record.kind, ConnectionKind.streaming);
     expect(record.outcome, ConnectionOutcome.completed);
+  });
+
+  test('recovers a failure between idle samples only once', () async {
+    final started = DateTime(2026, 11, 28, 12);
+    var clock = started;
+    final launches = <(DateTime, DateTime, DateTime)>[];
+    final log = ConnectionLog(
+      now: () => clock,
+      launchFailures: (since, after, through) async {
+        launches.add((since, after, through));
+        return SunshineStreamLog.parseLaunchFailures(
+          '[2026-11-28 12:00:01.100]: Info: New streaming session started [active sessions: 1]\n'
+          '[2026-11-28 12:00:01.200]: Error: Failed to start a streaming session\n',
+          since,
+          after,
+          through,
+        );
+      },
+    );
+    await log.sessionSample(false);
+    for (final seconds in [2, 4, 8, 12]) {
+      clock = started.add(Duration(seconds: seconds));
+      await log.sessionSample(false);
+    }
+    expect(launches, hasLength(3));
+    expect(launches[1].$2, started.add(const Duration(seconds: 4)));
+    final failure = (await log.read()).single;
+    expect(failure.duration, const Duration(milliseconds: 100));
+    expect(failure.issue, ConnectionIssue.streamLaunch);
+    expect(failure.outcome, ConnectionOutcome.failed);
+    expect(failure.client, isEmpty);
+  });
+
+  test('discards an idle scan if a stream becomes active before it returns',
+      () async {
+    final started = DateTime.utc(2026, 11, 28, 12);
+    var clock = started;
+    final inFlight = Completer<List<SunshineStreamEvidence>>();
+    final log = ConnectionLog(
+      now: () => clock,
+      launchFailures: (_, __, ___) => inFlight.future,
+    );
+    await log.sessionSample(false);
+    clock = started.add(const Duration(seconds: 4));
+    final scan = log.sessionSample(false);
+    await log.sessionSample(true);
+    inFlight.complete([
+      SunshineStreamEvidence(started, clock,
+          failure: SunshineStreamFailure.launch)
+    ]);
+    await scan;
+    expect(await log.read(), isEmpty);
+    clock = started.add(const Duration(seconds: 8));
+    await log.sessionSample(false);
+    expect((await log.read()).single.outcome, ConnectionOutcome.completed);
   });
 
   test('formats a failed stream using Sunshine evidence', () async {

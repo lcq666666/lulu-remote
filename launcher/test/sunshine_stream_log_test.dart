@@ -15,6 +15,39 @@ void main() {
   SunshineStreamEvidence? parse(List<String> lines) =>
       SunshineStreamLog.parse(lines.join('\r\n'), sampledStart, sampledEnd);
 
+  test('reads only fresh explicit launch failures in the idle window', () {
+    final idle = DateTime(2026, 11, 28, 12, 0, 1);
+    final lastRead = DateTime(2026, 11, 28, 12, 0, 4);
+    String begun(String at, [int count = 1]) =>
+        _event(at, 'New streaming session started [active sessions: $count]');
+    String failed(String at) =>
+        _event(at, 'Failed to start a streaming session', level: 'Error');
+    final evidence = SunshineStreamLog.parseLaunchFailures(
+        [
+          begun('02.250'), failed('03.000'), // Already read.
+          begun('03.250'), failed('04.100'), // Crosses the last read boundary.
+          failed('04.200'), // No new launch.
+          begun('04.300', 2), failed('04.500'), // Overlapping session.
+          begun('05.000'), _event('05.100', 'CLIENT CONNECTED'),
+          failed('05.200'),
+          begun('06.000'), failed('10.000'), // Too far apart to attribute.
+          begun('11.000'), failed('11.050'),
+          begun('22.100'), failed('22.150'), // Later than this poll.
+        ].join('\n'),
+        idle,
+        lastRead,
+        sampledEnd);
+    expect(evidence.map((entry) => entry.end), [
+      DateTime(2026, 11, 28, 12, 0, 4, 100),
+      DateTime(2026, 11, 28, 12, 0, 11, 50),
+    ]);
+    expect(
+        evidence.every((entry) =>
+            entry.peerAddress == null &&
+            entry.failure == SunshineStreamFailure.launch),
+        isTrue);
+  });
+
   test('matches Sunshine activity and keeps precise local timestamps', () {
     final evidence = parse([launch, connect, disconnect])!;
     expect(evidence.start, DateTime(2026, 11, 28, 12, 0, 3, 500));

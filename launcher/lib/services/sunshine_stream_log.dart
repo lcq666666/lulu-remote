@@ -28,21 +28,74 @@ class SunshineStreamLog {
 
   static Future<SunshineStreamEvidence?> read(
       DateTime sampledStart, DateTime sampledEnd) async {
-    if (!Platform.isWindows) return null;
-    final paths = {
-      Platform.environment['ProgramW6432'],
-      Platform.environment['ProgramFiles'],
-    }.whereType<String>();
-    for (final path in paths) {
-      final current = '$path\\Sunshine\\config\\sunshine.log';
+    for (final path in _windowsLogs) {
       final evidence = parse(
-        await _tail(current),
+        await _tail(path),
         sampledStart,
         sampledEnd,
       );
       if (evidence != null) return evidence;
     }
     return null;
+  }
+
+  static Iterable<String> get _windowsLogs sync* {
+    if (!Platform.isWindows) return;
+    for (final root in {
+      Platform.environment['ProgramW6432'],
+      Platform.environment['ProgramFiles'],
+    }.whereType<String>()) {
+      yield '$root\\Sunshine\\config\\sunshine.log';
+    }
+  }
+
+  static Future<List<SunshineStreamEvidence>> readLaunchFailures(
+      DateTime idleSince, DateTime after, DateTime through) async {
+    for (final path in _windowsLogs) {
+      final text = await _tail(path);
+      if (text.isNotEmpty) {
+        return parseLaunchFailures(text, idleSince, after, through);
+      }
+    }
+    return const [];
+  }
+
+  /// In stock Sunshine the RTSP handler logs this exact failure immediately
+  /// after creating a session slot, before there is a streaming connection.
+  /// Only use an unambiguous, single-slot launch within a confirmed-idle span.
+  static List<SunshineStreamEvidence> parseLaunchFailures(
+      String text, DateTime idleSince, DateTime after, DateTime through) {
+    final failures = <SunshineStreamEvidence>[];
+    DateTime? launched;
+    for (final line in const LineSplitter().convert(text)) {
+      final event = _event.firstMatch(line);
+      if (event == null) continue;
+      final time = DateTime.tryParse(event[1]!);
+      if (time == null || time.isBefore(idleSince) || time.isAfter(through)) {
+        continue;
+      }
+      final level = event[2];
+      final message = event[3]!;
+      final count = level == 'Info' ? _sessionCount.firstMatch(message) : null;
+      if (count != null) {
+        launched = count[1] == '1' ? time : null;
+        continue;
+      }
+      if (level == 'Info' &&
+          (message == 'CLIENT CONNECTED' || message == 'CLIENT DISCONNECTED')) {
+        launched = null;
+      }
+      if (_failure(level, message) != SunshineStreamFailure.launch) continue;
+      final start = launched;
+      launched = null;
+      if (start == null ||
+          !time.isAfter(after) ||
+          time.isBefore(start) ||
+          time.difference(start) > const Duration(seconds: 3)) continue;
+      failures.add(SunshineStreamEvidence(start, time,
+          failure: SunshineStreamFailure.launch));
+    }
+    return failures;
   }
 
   static Future<String> _tail(String path) async {

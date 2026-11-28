@@ -103,21 +103,32 @@ class ConnectionLog {
     Future<SunshineStreamEvidence?> Function(DateTime, DateTime)?
         streamEvidence,
     Future<String?> Function(InternetAddress)? peerName,
+    Future<List<SunshineStreamEvidence>> Function(DateTime, DateTime, DateTime)?
+        launchFailures,
   })  : _now = now ?? DateTime.now,
         _streamEvidence = streamEvidence,
-        _peerName = peerName;
+        _peerName = peerName,
+        _launchFailures = launchFailures;
 
   static final instance = ConnectionLog(
     streamEvidence: SunshineStreamLog.read,
     peerName: MeshStatusService().tailscalePeerName,
+    launchFailures: SunshineStreamLog.readLaunchFailures,
   );
   static const _logKey = 'qg_connection_log_v1';
   final DateTime Function() _now;
   final Future<SunshineStreamEvidence?> Function(DateTime, DateTime)?
       _streamEvidence;
   final Future<String?> Function(InternetAddress)? _peerName;
+  final Future<List<SunshineStreamEvidence>> Function(
+      DateTime, DateTime, DateTime)? _launchFailures;
   Future<void> _writes = Future<void>.value();
   DateTime? _streamStart;
+  DateTime? _idleSince;
+  DateTime? _launchFailuresThrough;
+  DateTime? _lastIdleScan;
+  bool _checkingIdle = false;
+  int _stopGeneration = 0;
   final _pairing = <String, _PairingAttempt>{};
   final _finishedRequests = <String>{};
 
@@ -157,11 +168,15 @@ class ConnectionLog {
   }
 
   Future<void> sessionSample(bool? active) async {
-    if (active == true) {
-      _streamStart ??= _now();
-    } else if (_streamStart case final start? when active == false) {
+    if (active != false) {
+      _idleSince = _launchFailuresThrough = _lastIdleScan = null;
+      if (active == true) _streamStart ??= _now();
+      return;
+    }
+    final end = _now();
+    if (_streamStart case final start?) {
       _streamStart = null;
-      final end = _now();
+      _idleSince = _launchFailuresThrough = _lastIdleScan = end;
       await _queueEntry(() async {
         SunshineStreamEvidence? evidence;
         String? client;
@@ -192,6 +207,45 @@ class ConnectionLog {
           issue: issue,
         );
       });
+    } else {
+      await _scanIdleFailures(end);
+    }
+  }
+
+  Future<void> _scanIdleFailures(DateTime end) async {
+    final read = _launchFailures;
+    if (read == null || _checkingIdle) return;
+    final since = _idleSince ??= end;
+    final after = _launchFailuresThrough ??= since;
+    final last = _lastIdleScan ??= since;
+    if (end.isBefore(last)) {
+      // Wall clock changed. Do not re-import old entries into a new span.
+      _idleSince = _launchFailuresThrough = _lastIdleScan = end;
+      return;
+    }
+    if (end.difference(last) < const Duration(seconds: 4)) return;
+    _lastIdleScan = end;
+    _checkingIdle = true;
+    final generation = _stopGeneration;
+    try {
+      final failures = await read(since, after, end);
+      if (generation != _stopGeneration || _idleSince != since) return;
+      _launchFailuresThrough = end;
+      for (final failure in failures) {
+        if (generation != _stopGeneration || _idleSince != since) break;
+        await _append(ConnectionEntry(
+          ConnectionKind.streaming,
+          failure.start,
+          failure.end,
+          '',
+          ConnectionOutcome.failed,
+          issue: ConnectionIssue.streamLaunch,
+        ));
+      }
+    } on Exception {
+      // A missing, unreadable, or rotating log must not affect the tray.
+    } finally {
+      _checkingIdle = false;
     }
   }
 
@@ -251,6 +305,8 @@ class ConnectionLog {
   }
 
   Future<void> stop() async {
+    _stopGeneration++;
+    _idleSince = _launchFailuresThrough = _lastIdleScan = null;
     final start = _streamStart;
     _streamStart = null;
     final attempts = _pairing.values.toList();
