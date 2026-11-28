@@ -10,7 +10,6 @@ from pathlib import Path
 ANDROID = "{http://schemas.android.com/apk/res/android}"
 MAIN = Path(__file__).resolve().parents[2] / "android/app/src/main"
 RULES = "res/xml/device_data_rules.xml"
-PREFERENCE_DOMAINS = {"sharedpref", "device_sharedpref"}
 
 
 def verify(manifest, rules, rules_reference="@xml/device_data_rules"):
@@ -26,8 +25,8 @@ def verify(manifest, rules, rules_reference="@xml/device_data_rules"):
         raise ValueError("Invalid Android device data rules")
     for transport in ("cloud-backup", "device-transfer"):
         entries = rules.findall(f"{transport}/exclude")
-        domains = {entry.get("domain") for entry in entries if entry.get("path") == "."}
-        if not PREFERENCE_DOMAINS <= domains:
+        if not any(entry.get("domain") == "sharedpref" and entry.get("path") == "."
+                   for entry in entries):
             raise ValueError("Android preferences must stay local during " + transport)
 
 
@@ -90,9 +89,9 @@ class AndroidBackupPolicyTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "allowBackup"):
             verify(self.manifest, self.rules)
 
-    def test_rejects_incomplete_device_transfer_exclusions(self):
-        device = self.rules.find("device-transfer")
-        device.remove(device.find("exclude[@domain='device_sharedpref']"))
+    def test_rejects_partial_device_transfer_exclusion(self):
+        entry = self.rules.find("device-transfer/exclude[@domain='sharedpref']")
+        entry.set("path", "FlutterSecureStorage.xml")
         with self.assertRaisesRegex(ValueError, "device-transfer"):
             verify(self.manifest, self.rules)
 
