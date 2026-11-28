@@ -32,6 +32,19 @@ bool HasCaptureExclusion() {
 constexpr int kExitHotkey = 1;
 constexpr int kCloseButton = 2;
 
+RECT VirtualScreenBounds() {
+  const int x = GetSystemMetrics(SM_XVIRTUALSCREEN);
+  const int y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+  return {x, y, x + GetSystemMetrics(SM_CXVIRTUALSCREEN),
+                y + GetSystemMetrics(SM_CYVIRTUALSCREEN)};
+}
+
+bool CoversBounds(HWND window, const RECT& expected) {
+  RECT actual{};
+  return expected.right > expected.left && expected.bottom > expected.top &&
+         GetWindowRect(window, &actual) && EqualRect(&actual, &expected);
+}
+
 bool ReadImage(const std::wstring& path, SIZE* size, HBITMAP* bitmap) {
   if (path.empty()) return false;
   ComPtr<IWICImagingFactory> wic;
@@ -152,7 +165,7 @@ std::optional<PrivacyPreview> PrivacyScreen::Show(HWND owner, bool use_image,
       window_, kExitHotkey, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'P') != FALSE;
   live_ = live;
   if (live) {
-    if (!PrepareLive(instance) || !Renew()) {
+    if (!PrepareLive(instance)) {
       Hide();
       return std::nullopt;
     }
@@ -171,10 +184,17 @@ std::optional<PrivacyPreview> PrivacyScreen::Show(HWND owner, bool use_image,
     SendMessageW(close_button_, WM_SETFONT,
                  reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
   }
+  if (!Layout() || (live && !Renew())) {
+    Hide();
+    return std::nullopt;
+  }
+  ShowWindow(window_, SW_SHOWNOACTIVATE);
+  if (!IsWindowVisible(window_)) {
+    Hide();
+    return std::nullopt;
+  }
   owner_ = owner;
   request_id_ = request_id;
-  Layout();
-  ShowWindow(window_, SW_SHOWNOACTIVATE);
   return PrivacyPreview{fallback, live || hotkey_registered_};
 }
 
@@ -200,8 +220,15 @@ bool PrivacyScreen::PrepareLive(HINSTANCE instance) {
 }
 
 bool PrivacyScreen::Renew() {
-  return window_ && live_ &&
-         SetTimer(window_, kPreviewTimer, kLiveLeaseMilliseconds, nullptr) != 0;
+  if (!window_ || !live_) return false;
+  // Recheck the current virtual desktop even if Windows did not deliver a
+  // display-change message (e.g. the desktop was rearranged between polls).
+  if ((!CoversBounds(window_, VirtualScreenBounds()) && !Layout()) ||
+      !SetTimer(window_, kPreviewTimer, kLiveLeaseMilliseconds, nullptr)) {
+    Hide();  // A failed renewal is not a user dismissal.
+    return false;
+  }
+  return true;
 }
 
 LRESULT CALLBACK PrivacyScreen::KeyboardHook(int code, WPARAM wparam,
@@ -268,19 +295,27 @@ void PrivacyScreen::DismissByUser() {
   Hide(true);
 }
 
-void PrivacyScreen::Layout() {
-  const int x = GetSystemMetrics(SM_XVIRTUALSCREEN);
-  const int y = GetSystemMetrics(SM_YVIRTUALSCREEN);
-  SetWindowPos(window_, HWND_TOPMOST, x, y,
-               GetSystemMetrics(SM_CXVIRTUALSCREEN),
-               GetSystemMetrics(SM_CYVIRTUALSCREEN), SWP_NOACTIVATE);
+bool PrivacyScreen::Layout() {
+  const auto bounds = VirtualScreenBounds();
+  const int width_px = bounds.right - bounds.left;
+  const int height_px = bounds.bottom - bounds.top;
+  if (width_px <= 0 || height_px <= 0 ||
+      !SetWindowPos(window_, HWND_TOPMOST, bounds.left, bounds.top,
+                    width_px, height_px, SWP_NOACTIVATE) ||
+      !CoversBounds(window_, bounds)) {
+    return false;
+  }
   const UINT dpi = GetDpiForWindow(window_);
   const int width = MulDiv(180, dpi, 96);
   const int height = MulDiv(32, dpi, 96);
   // Screen coordinates (0, 0) are the primary monitor's top-left corner.
   const int margin = MulDiv(16, dpi, 96);
-  if (close_button_) MoveWindow(close_button_, margin - x, margin - y, width, height, TRUE);
+  if (close_button_) {
+    MoveWindow(close_button_, margin - bounds.left, margin - bounds.top,
+               width, height, TRUE);
+  }
   InvalidateRect(window_, nullptr, FALSE);
+  return true;
 }
 
 LRESULT CALLBACK PrivacyScreen::WindowProc(HWND window, UINT message,
@@ -304,7 +339,7 @@ LRESULT PrivacyScreen::HandleMessage(UINT message, WPARAM wparam, LPARAM lparam)
     case WM_CLOSE:
       return 0;
     case WM_DISPLAYCHANGE:
-      Layout();
+      if (!Layout()) Hide(!live_);
       return 0;
     case kDismissLiveMessage:
       if (live_) DismissByUser();
