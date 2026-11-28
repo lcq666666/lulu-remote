@@ -391,6 +391,32 @@ void main() {
     expect(hardware.summary, contains('Windows TEST'));
   });
 
+  test('hardware distinguishes installed and Windows-visible memory', () async {
+    final oldPayload = hardwareReport.toJson();
+    expect(HostHardware.fromJson(oldPayload).installedRamBytes, isNull);
+    const visible = 16780480512;
+    const installed = 17179869184;
+    final payload = {
+      ...oldPayload,
+      'ramBytes': visible,
+      'installedRamBytes': installed,
+    };
+    hardwareReport = HostHardware.fromJson(payload);
+    server.hardwareEnabled = true;
+    final report = await client.hardware();
+    expect(report.ramBytes, visible);
+    expect(report.installedRamBytes, installed);
+    expect(report.toJson(), payload);
+    expect(report.summary, contains('16.0 GiB'));
+    expect(report.summary, contains('15.6 GiB'));
+    for (final invalid in [visible - 1, 0, '16 GB']) {
+      expect(
+        () => HostHardware.fromJson({...payload, 'installedRamBytes': invalid}),
+        throwsFormatException,
+      );
+    }
+  });
+
   test('hardware shares named fixed drives in system-first order', () async {
     hardwareReport = const HostHardware(
         cpu: 'TEST CPU',
@@ -465,6 +491,10 @@ void main() {
     expect(hardware.cpu, isNotEmpty);
     expect(hardware.os, contains('Windows'));
     expect(hardware.ramBytes, greaterThan(0));
+    expect(hardware.ramBytes % 1024, 0);
+    if (hardware.installedRamBytes case final installed?) {
+      expect(installed, greaterThanOrEqualTo(hardware.ramBytes));
+    }
     expect(hardware.diskBytes, greaterThanOrEqualTo(hardware.diskFreeBytes));
     expect(hardware.volumes, isNotEmpty);
     final systemVolume = hardware.volumes.first;

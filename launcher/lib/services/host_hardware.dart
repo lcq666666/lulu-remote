@@ -47,6 +47,7 @@ class HostHardware {
       required this.diskBytes,
       required this.diskFreeBytes,
       required this.os,
+      this.installedRamBytes,
       this.volumes = const []});
 
   factory HostHardware.fromJson(Map<String, dynamic> json) {
@@ -62,17 +63,28 @@ class HostHardware {
             volumes.skip(1).any((volume) => volume.system))) {
       throw const FormatException('Invalid system volume');
     }
+    final ram = _bytes(json, 'ramBytes');
+    final installed = json['installedRamBytes'] == null
+        ? null
+        : _bytes(json, 'installedRamBytes');
+    if (installed != null && (installed == 0 || installed < ram)) {
+      throw const FormatException('Invalid installed memory');
+    }
     return HostHardware(
         cpu: _text(json, 'cpu'),
         os: _text(json, 'os'),
-        ramBytes: _bytes(json, 'ramBytes'),
+        ramBytes: ram,
+        installedRamBytes: installed,
         diskBytes: total,
         diskFreeBytes: free,
         volumes: volumes);
   }
 
   final String cpu;
+  // Keep the existing field for the memory visible to Windows; older clients
+  // can ignore the optional installed capacity.
   final int ramBytes;
+  final int? installedRamBytes;
   final int diskBytes;
   final int diskFreeBytes;
   final String os;
@@ -120,6 +132,7 @@ class HostHardware {
   Map<String, dynamic> toJson() => {
         'cpu': cpu,
         'ramBytes': ramBytes,
+        if (installedRamBytes != null) 'installedRamBytes': installedRamBytes,
         'diskBytes': diskBytes,
         'diskFreeBytes': diskFreeBytes,
         'os': os,
@@ -135,7 +148,10 @@ class HostHardware {
 
   String get summary => [
         'CPU：$cpu',
-        '内存：${_gib(ramBytes)}',
+        if (installedRamBytes case final installed?)
+          '内存：${_gib(installed)} 已安装 / ${_gib(ramBytes)} Windows 可用总量'
+        else
+          '内存：${_gib(ramBytes)}',
         if (volumes.isEmpty)
           '系统盘：${_capacity(diskFreeBytes, diskBytes)}'
         else
@@ -147,20 +163,37 @@ class HostHardware {
   static const _query = r'''
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
-$system = Get-CimInstance Win32_ComputerSystem
-$os = Get-CimInstance Win32_OperatingSystem
-$processors = @(Get-CimInstance Win32_Processor | ForEach-Object { $_.Name.Trim() } | Select-Object -Unique)
-$disks = @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType = 3' |
+$os = Get-CimInstance Win32_OperatingSystem -Property Caption,Version,SystemDrive,TotalVisibleMemorySize
+$processors = @(Get-CimInstance Win32_Processor -Property Name | ForEach-Object { $_.Name.Trim() } | Select-Object -Unique)
+$disks = @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType = 3' -Property DeviceID,Size,FreeSpace |
     Where-Object { $_.DeviceID -match '^[A-Z]:$' -and $_.Size -gt 0 -and $null -ne $_.FreeSpace })
 $disk = $disks | Where-Object DeviceID -eq $os.SystemDrive | Select-Object -First 1
-if (!$disk -or !$processors -or !$system.TotalPhysicalMemory) { exit 1 }
+$visibleMemory = [uint64]$os.TotalVisibleMemorySize * 1024
+if (!$disk -or !$processors -or !$visibleMemory) { exit 1 }
+$installedMemory = [uint64]0
+try {
+    $modules = @(Get-CimInstance Win32_PhysicalMemory -Property Capacity)
+    foreach ($module in $modules) {
+        if (!$module.Capacity) {
+            $installedMemory = 0
+            break
+        }
+        $installedMemory += [uint64]$module.Capacity
+    }
+} catch {
+    # Firmware or policy may hide the module capacities. Report visible RAM
+    # without estimating the installed total from incomplete data.
+    $installedMemory = 0
+}
 $volumes = @($disks | ForEach-Object {
     @{ drive = $_.DeviceID.ToUpperInvariant(); totalBytes = $_.Size;
        freeBytes = $_.FreeSpace; system = ($_.DeviceID -eq $os.SystemDrive) }
 })
-@{ cpu = $processors -join ' / '; ramBytes = $system.TotalPhysicalMemory;
+$report = @{ cpu = $processors -join ' / '; ramBytes = $visibleMemory;
    diskBytes = $disk.Size; diskFreeBytes = $disk.FreeSpace;
-   os = "$($os.Caption.Trim()) ($($os.Version))"; volumes = $volumes } | ConvertTo-Json -Depth 3 -Compress
+   os = "$($os.Caption.Trim()) ($($os.Version))"; volumes = $volumes }
+if ($installedMemory -ge $visibleMemory) { $report.installedRamBytes = $installedMemory }
+$report | ConvertTo-Json -Depth 3 -Compress
 ''';
 
   static Future<HostHardware> readWindows() async {

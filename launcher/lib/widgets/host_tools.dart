@@ -93,7 +93,8 @@ class _HostToolsSettingsState extends State<HostToolsSettings> {
               HostToolPanel.clipboard => '持协作码的控制端可手动读取或替换本机剪贴板文本。',
               HostToolPanel.diagnostics => '持协作码的控制端可查询电脑名称和远程服务状态。',
               HostToolPanel.command => '持协作码的控制端可运行内置查询和本机批准的预设命令。',
-              HostToolPanel.hardware => '持协作码的控制端可查看 CPU、内存、系统盘容量和 Windows 版本。',
+              HostToolPanel.hardware =>
+                '持协作码的控制端可查看 CPU、内存、本地固定盘容量和 Windows 版本。',
             }),
             value: _enabled ?? false,
             onChanged: _busy || _enabled == null
