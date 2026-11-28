@@ -39,6 +39,23 @@ void main() {
     expect(await mesh.check(device), HostStatus.online);
   });
 
+  test('discovery exposes only a valid Sunshine UUID for a shortcut', () async {
+    const uuid = '29a7a2ce-3c38-462f-b94a-350c87f58d8b';
+    var uniqueId = '<uniqueid>$uuid</uniqueid>';
+    server.listen((request) {
+      request.response.write(
+          '<root status_code="200"><appversion>7.1</appversion>$uniqueId</root>');
+      request.response.close();
+    });
+    expect((await mesh.diagnose(device)).hostUuid, uuid);
+    for (final element in ['', '<uniqueid>bad-id</uniqueid>']) {
+      uniqueId = element;
+      final result = await mesh.diagnose(device);
+      expect(result.status, HostStatus.online);
+      expect(result.hostUuid, isNull);
+    }
+  });
+
   test('a redirected status request does not mark the host online', () async {
     server.listen((request) {
       if (request.uri.path == '/serverinfo') {
