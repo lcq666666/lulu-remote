@@ -254,6 +254,53 @@ void main() {
     expect(local, 'local');
   });
 
+  test('stopping during authentication cancels a queued clipboard upload',
+      () async {
+    server.clipboardEnabled = true;
+    server.clipboardSyncEnabled = true;
+    streaming = true;
+    final endpoint = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => endpoint.close(force: true));
+    final challenged = Completer<void>();
+    final releaseChallenge = Completer<void>();
+    final challengeFinished = Completer<void>();
+    var holdChallenge = false;
+    var pushes = 0;
+    endpoint.listen((request) async {
+      final operation = request.uri.pathSegments.last;
+      if (operation == 'clipboard-push') pushes++;
+      if (operation == 'challenge' && holdChallenge) {
+        challenged.complete();
+        await releaseChallenge.future;
+        await server.handle(request);
+        challengeFinished.complete();
+      } else {
+        await server.handle(request);
+      }
+    });
+    var local = 'old text';
+    final session = ClipboardSyncSession(
+      client: HostToolsClient('127.0.0.1', server.code, port: endpoint.port),
+      readLocal: () async => local,
+      writeLocal: (_) async => fail('unexpected clipboard write'),
+      onError: (error) => fail('$error'),
+    );
+    addTearDown(session.stop);
+    await session.start(interval: const Duration(hours: 1));
+    holdChallenge = true;
+    local = 'new text';
+    final pending = session.poll();
+    await challenged.future;
+    session.stop();
+    // The host is still permitted to sync; even so, stopping this controller
+    // before authentication finishes must prevent sending the queued text.
+    releaseChallenge.complete();
+    await pending;
+    await challengeFinished.future;
+    expect(pushes, 0);
+    expect(clipboard, isNot('new text'));
+  });
+
   test('fixed diagnostics only return a result when enabled', () async {
     server.clipboardEnabled = true;
     await expectLater(client.diagnostics(), throwsA(isA<HostToolsException>()));
@@ -373,8 +420,8 @@ class _DelayedClipboardClient extends HostToolsClient {
   final reply = Completer<({List<int> digest, String? text})>();
 
   @override
-  Future<({List<int> digest, String? text})> watchClipboard(
-      List<int>? digest) async {
+  Future<({List<int> digest, String? text})> watchClipboard(List<int>? digest,
+      {ClipboardSyncCancellation? cancellation}) async {
     if (digest == null) return (digest: List.filled(32, 0), text: null);
     request.complete();
     return reply.future;

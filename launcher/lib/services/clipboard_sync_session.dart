@@ -15,6 +15,7 @@ class ClipboardSyncSession {
   final Future<String> Function() readLocal;
   final Future<void> Function(String) writeLocal;
   final void Function(Object) onError;
+  final _cancellation = ClipboardSyncCancellation();
   List<int>? _remoteDigest;
   String? _lastLocal;
   Timer? _timer;
@@ -22,13 +23,18 @@ class ClipboardSyncSession {
   bool _polling = false;
 
   Future<void> start({Duration interval = const Duration(seconds: 2)}) async {
-    final initialLocal = await readLocal();
-    if (_stopped) return;
-    _lastLocal = initialLocal;
-    final initialRemote = await client.watchClipboard(null);
-    if (_stopped) return;
-    _remoteDigest = initialRemote.digest;
-    _timer = Timer.periodic(interval, (_) => unawaited(poll()));
+    try {
+      final initialLocal = await readLocal();
+      if (_stopped) return;
+      _lastLocal = initialLocal;
+      final initialRemote =
+          await client.watchClipboard(null, cancellation: _cancellation);
+      if (_stopped) return;
+      _remoteDigest = initialRemote.digest;
+      _timer = Timer.periodic(interval, (_) => unawaited(poll()));
+    } on Exception {
+      if (!_stopped) rethrow;
+    }
   }
 
   Future<void> poll() async {
@@ -43,12 +49,14 @@ class ClipboardSyncSession {
         if (local.isNotEmpty &&
             local.length <= clipboardMaxBytes &&
             utf8.encode(local).length <= clipboardMaxBytes) {
-          final digest = await client.pushClipboard(local);
+          final digest =
+              await client.pushClipboard(local, cancellation: _cancellation);
           if (!_stopped) _remoteDigest = digest;
           return;
         }
       }
-      final remote = await client.watchClipboard(digest);
+      final remote =
+          await client.watchClipboard(digest, cancellation: _cancellation);
       if (_stopped) return;
       final text = remote.text;
       if (text != null) {
@@ -72,6 +80,7 @@ class ClipboardSyncSession {
 
   void stop() {
     _stopped = true;
+    _cancellation.cancel();
     _timer?.cancel();
     _timer = null;
     _lastLocal = null;

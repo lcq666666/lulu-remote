@@ -270,6 +270,30 @@ class HostToolsServer {
   }
 }
 
+/// Cancels only a single automatic clipboard session, not manual host tools.
+/// A write already delivered to the peer cannot be undone.
+class ClipboardSyncCancellation {
+  bool _cancelled = false;
+  final _clients = <HttpClient>{};
+
+  void cancel() {
+    if (_cancelled) return;
+    _cancelled = true;
+    for (final client in _clients) {
+      client.close(force: true);
+    }
+    _clients.clear();
+  }
+
+  void _check() {
+    if (_cancelled) throw const _ClipboardSyncStopped();
+  }
+}
+
+class _ClipboardSyncStopped implements Exception {
+  const _ClipboardSyncStopped();
+}
+
 class HostToolsClient {
   HostToolsClient(this.address, this.code, {this.port = fileTransferPort});
 
@@ -291,8 +315,11 @@ class HostToolsClient {
           as Map<String, dynamic>);
 
   Future<({List<int> digest, String? text})> watchClipboard(
-      List<int>? digest) async {
-    final bytes = await _exchange('clipboard-watch', digest ?? const []);
+    List<int>? digest, {
+    ClipboardSyncCancellation? cancellation,
+  }) async {
+    final bytes = await _exchange('clipboard-watch', digest ?? const [],
+        cancellation: cancellation);
     if (bytes.length < _digestBytes) throw const FormatException();
     return (
       digest: bytes.sublist(0, _digestBytes),
@@ -302,12 +329,14 @@ class HostToolsClient {
     );
   }
 
-  Future<List<int>> pushClipboard(String text) async {
+  Future<List<int>> pushClipboard(String text,
+      {ClipboardSyncCancellation? cancellation}) async {
     final bytes = utf8.encode(text);
     if (bytes.isEmpty || bytes.length > clipboardMaxBytes) {
       throw const FormatException();
     }
-    final result = await _exchange('clipboard-push', bytes);
+    final result =
+        await _exchange('clipboard-push', bytes, cancellation: cancellation);
     if (result.length != _digestBytes) throw const FormatException();
     return result;
   }
@@ -326,16 +355,20 @@ class HostToolsClient {
     await _exchange('clipboard-write', bytes);
   }
 
-  Future<List<int>> _exchange(String operation, List<int> payload) async {
+  Future<List<int>> _exchange(String operation, List<int> payload,
+      {ClipboardSyncCancellation? cancellation}) async {
+    cancellation?._check();
     if (!validTransferCode(code)) {
       throw const HostToolsException('请填写正确的协作码。');
     }
     final client = HttpClient()
       ..connectionTimeout = _timeout
       ..findProxy = (_) => 'DIRECT';
+    cancellation?._clients.add(client);
     try {
       final hello =
           await _post(client, 'challenge', newTransferCode(), const []);
+      cancellation?._check();
       final challenge = utf8.decode(hello);
       if (!validTransferCode(challenge)) throw const FormatException();
       return await _post(client, operation, challenge, payload);
@@ -346,6 +379,7 @@ class HostToolsClient {
     } on Exception {
       throw const HostToolsException('无法连接被控电脑。请检查组网和被控端开关。');
     } finally {
+      cancellation?._clients.remove(client);
       client.close(force: true);
     }
   }
