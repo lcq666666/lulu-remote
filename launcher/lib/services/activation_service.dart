@@ -127,11 +127,13 @@ class ActivationService {
   static const _validateKey = 'lulu_activation_last_check';
   static const _revokedKey = 'lulu_activation_revoked';
   static const _week = Duration(days: 7);
+  static const _healthRetry = Duration(minutes: 5);
   final SecureStore _store;
   final Future<MachineFingerprint> Function() _readMachine;
   final ActivationVerifier _verifier;
   final DateTime Function() _clock;
   bool _checking = false;
+  int? _lastHealthAttempt;
 
   Future<String> server() async =>
       (await SharedPreferences.getInstance()).getString(_serverKey) ??
@@ -182,17 +184,7 @@ class ActivationService {
       throw const ActivationFailure(ActivationError.configuration);
     }
     final endpoint = _address(address);
-    final nonce = _nonce();
-    final status =
-        await _request(endpoint, '/v1/status', query: {'nonce': nonce});
-    if (status.code != 200 || status.data['ok'] != true) {
-      throw const ActivationFailure(ActivationError.unreachable);
-    }
-    final proof = status.data['proof'];
-    if (proof is! String ||
-        !await _verifier.verify(utf8.encode('lulu-status-v1:$nonce'), proof)) {
-      throw const ActivationFailure(ActivationError.invalidServer);
-    }
+    await _verifyServer(endpoint);
     final response = await _request(endpoint, '/v1/activate', body: {
       'key': key,
       'machine_code': machine.code,
@@ -249,9 +241,22 @@ class ActivationService {
       final token = await _store.readActivationToken();
       if (token == null) return false;
       final endpoint = _address(await server());
-      // Count attempts as well as successes so an unavailable server never
-      // causes every startup or foreground event to retry the request.
-      if (!await prefs.setInt(_validateKey, now)) return false;
+      final lastHealth = _lastHealthAttempt;
+      if (lastHealth != null &&
+          now >= lastHealth &&
+          now - lastHealth < _healthRetry.inMilliseconds) return false;
+      // Confirm the configured server is reachable and holds the signing key
+      // before using this week's validation attempt. Failed readiness checks
+      // are retried independently of the weekly /v1/validate limit.
+      _lastHealthAttempt = now;
+      await _verifyServer(endpoint);
+      _lastHealthAttempt = null;
+      if (await _store.readActivationToken() != token) return false;
+      // After sending validate we may lose its response. Count the attempt
+      // once it can be sent, so foreground events do not send it again.
+      if (!await prefs.setInt(_validateKey, _clock().millisecondsSinceEpoch)) {
+        return false;
+      }
       final nonce = _nonce();
       final result = await _request(endpoint, '/v1/validate',
           body: {'token': token, 'nonce': nonce});
@@ -280,6 +285,20 @@ class ActivationService {
       return false;
     } finally {
       _checking = false;
+    }
+  }
+
+  Future<void> _verifyServer(Uri endpoint) async {
+    final nonce = _nonce();
+    final status =
+        await _request(endpoint, '/v1/status', query: {'nonce': nonce});
+    if (status.code != 200 || status.data['ok'] != true) {
+      throw const ActivationFailure(ActivationError.unreachable);
+    }
+    final proof = status.data['proof'];
+    if (proof is! String ||
+        !await _verifier.verify(utf8.encode('lulu-status-v1:$nonce'), proof)) {
+      throw const ActivationFailure(ActivationError.invalidServer);
     }
   }
 
