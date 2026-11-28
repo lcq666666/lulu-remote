@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../app.dart';
@@ -10,10 +12,18 @@ import '../widgets/lulu_ui.dart';
 /// Add a host: name + mesh address. No password is asked here — the
 /// Sunshine admin password is entered on the pairing screen, once.
 class AddDeviceScreen extends StatefulWidget {
-  const AddDeviceScreen({super.key, this.device, this.dialog = false});
+  const AddDeviceScreen({
+    super.key,
+    this.device,
+    this.dialog = false,
+    this.savedAddresses = const {},
+    this.findComputers,
+  });
 
   final Device? device;
   final bool dialog;
+  final Set<String> savedAddresses;
+  final Future<List<MeshComputer>> Function()? findComputers;
 
   @override
   State<AddDeviceScreen> createState() => _AddDeviceScreenState();
@@ -41,6 +51,47 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
   String? _error;
 
   bool _saving = false;
+  bool _discovering = false;
+  String? _discoveryInfo;
+  List<MeshComputer> _computers = const [];
+
+  Future<void> _discover() async {
+    setState(() {
+      _discovering = true;
+      _discoveryInfo = null;
+      _computers = const [];
+    });
+    try {
+      final found = await (widget.findComputers?.call() ??
+          MeshStatusService().discoverTailscaleComputers(
+              savedAddresses: widget.savedAddresses));
+      if (!mounted) return;
+      setState(() {
+        _computers = found;
+        if (found.isEmpty) {
+          _discoveryInfo = '没找到可添加的电脑。请确认对方开启了远程控制，或手动填写地址。';
+        }
+      });
+    } on Exception {
+      if (!mounted) return;
+      setState(() => _discoveryInfo = '无法读取 Tailscale 设备。请确认已登录组网，或手动填写地址。');
+    } finally {
+      if (mounted) setState(() => _discovering = false);
+    }
+  }
+
+  void _selectComputer(MeshComputer computer) {
+    setState(() {
+      _nameController.text = computer.name;
+      _addressController.text = computer.address;
+      _sunshinePortController.text = '47989';
+      _webPortController.text = '47990';
+      _network = NetworkKind.tailscale;
+      _error = null;
+      _computers = const [];
+      _discoveryInfo = '已填入地址，请确认后保存。';
+    });
+  }
 
   Future<void> _save() async {
     final name = _nameController.text.trim();
@@ -163,6 +214,28 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
       icon: Icons.desktop_windows_outlined,
       dialog: widget.dialog,
       children: [
+        if (widget.device == null &&
+            (Platform.isWindows || widget.findComputers != null)) ...[
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              onPressed: _saving || _discovering ? null : _discover,
+              icon: const Icon(Icons.search),
+              label: Text(_discovering ? '正在查找…' : '发现 Tailscale 电脑'),
+            ),
+          ),
+          const Text('仅检查本组网中已知的在线设备和默认端口。没有结果时可手动添加。'),
+          for (final computer in _computers)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(computer.name),
+              subtitle: Text(computer.address, style: LuluTheme.mono),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: _saving ? null : () => _selectComputer(computer),
+            ),
+          if (_discoveryInfo case final info?) Text(info),
+          const SizedBox(height: 12),
+        ],
         TextField(
           controller: _nameController,
           enabled: !_saving,

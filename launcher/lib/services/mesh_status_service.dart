@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:xml/xml.dart';
 
@@ -121,7 +122,15 @@ class MeshStatusService {
             detail: '远程服务返回 HTTP ${response.statusCode}。',
           );
         }
-        final body = await response.transform(utf8.decoder).join();
+        const maxServerInfoBytes = 64 * 1024;
+        final bytes = BytesBuilder(copy: false);
+        await for (final chunk in response) {
+          if (bytes.length + chunk.length > maxServerInfoBytes) {
+            throw const FormatException('Serverinfo too large');
+          }
+          bytes.add(chunk);
+        }
+        final body = utf8.decode(bytes.takeBytes());
         final info = XmlDocument.parse(body).rootElement;
         if (info.name.local != 'root' ||
             info.getAttribute('status_code') != '200' ||
@@ -181,6 +190,111 @@ class MeshStatusService {
     } finally {
       client.close(force: true);
     }
+  }
+
+  static const discoveryLimit = 16;
+
+  /// Only checks online peers reported by the locally connected Tailscale
+  /// client. No address enumeration, credentials, redirects, or writes.
+  Future<List<MeshComputer>> discoverTailscaleComputers({
+    Set<String> savedAddresses = const {},
+  }) async {
+    final payload = await readTailscaleDiscoveryStatus();
+    if (payload == null) {
+      throw const FormatException('Tailscale status unavailable');
+    }
+    final (self, peers) = parseTailscaleDiscoveryStatus(payload);
+    final local = await NetworkInterface.list(type: InternetAddressType.IPv4);
+    final excluded = {
+      ...savedAddresses,
+      ...self,
+      for (final interface in local)
+        for (final ip in interface.addresses) ip.address,
+    };
+    final candidates = peers
+        .where((peer) => !excluded.contains(peer.address))
+        .take(discoveryLimit)
+        .toList();
+    final found = <MeshComputer>[];
+    const concurrency = 8;
+    for (var i = 0; i < candidates.length; i += concurrency) {
+      final reachable = await Future.wait(
+          candidates.skip(i).take(concurrency).map((peer) async {
+        final status = await check(Device(
+          id: '',
+          name: peer.name,
+          meshAddress: peer.address,
+          network: NetworkKind.tailscale,
+        ));
+        return status == HostStatus.online ? peer : null;
+      }));
+      found.addAll(reachable.whereType<MeshComputer>());
+    }
+    return found;
+  }
+
+  Future<String?> readTailscaleDiscoveryStatus() async {
+    if (!Platform.isWindows) return null;
+    Process? process;
+    try {
+      process = await Process.start(_tailscaleCommand(), ['status', '--json']);
+      final result = await Future.wait<Object>([
+        process.stdout.transform(utf8.decoder).join(),
+        process.stderr.drain<void>().then((_) => 0),
+        process.exitCode,
+      ]).timeout(const Duration(seconds: 4));
+      return result[2] == 0 ? result[0] as String : null;
+    } on Exception {
+      return null;
+    } finally {
+      process?.kill();
+    }
+  }
+
+  static (Set<String>, List<MeshComputer>) parseTailscaleDiscoveryStatus(
+      String payload) {
+    final status = jsonDecode(payload);
+    if (status is! Map || status['BackendState'] != 'Running') {
+      throw const FormatException('Tailscale not connected');
+    }
+    Iterable<String> addresses(Object? raw) sync* {
+      if (raw is! List) return;
+      for (final value in raw.whereType<String>()) {
+        final ip = InternetAddress.tryParse(value);
+        if (ip?.type == InternetAddressType.IPv4 && _isTailscaleAddress(ip!)) {
+          yield ip.address;
+        }
+      }
+    }
+
+    final self = status['Self'];
+    final selfIps = {
+      ...addresses(status['TailscaleIPs']),
+      if (self is Map) ...addresses(self['TailscaleIPs']),
+    };
+    final peers = status['Peer'];
+    if (selfIps.isEmpty) throw const FormatException('Missing Tailscale IP');
+    if (peers is! Map) return (selfIps, const []);
+    final distinct = <String, MeshComputer>{};
+    for (final peer in peers.values) {
+      if (peer is! Map || peer['Online'] != true) continue;
+      for (final ip in addresses(peer['TailscaleIPs'])) {
+        if (selfIps.contains(ip)) continue;
+        final dns = peer['DNSName'];
+        final host = dns is String ? dns.split('.').first : '';
+        final name = RegExp(r'^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}$').hasMatch(host)
+            ? host
+            : ip;
+        distinct.putIfAbsent(ip, () => MeshComputer(name, ip));
+        break;
+      }
+    }
+    final ordered = distinct.values.toList()
+      ..sort((left, right) {
+        final name = left.name.compareTo(right.name);
+        return name == 0 ? left.address.compareTo(right.address) : name;
+      });
+    return (selfIps, ordered);
   }
 
   Future<bool?> tailscaleConnected() async {
@@ -289,6 +403,13 @@ class MeshStatusService {
     }
     return null;
   }
+}
+
+class MeshComputer {
+  const MeshComputer(this.name, this.address);
+
+  final String name;
+  final String address;
 }
 
 class LocalAddress {

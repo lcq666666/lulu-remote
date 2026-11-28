@@ -613,8 +613,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _openAddDevice([Device? existing]) async {
     if (_saving || _connectingId != null) return;
-    final device = await _openDeviceForm(
-        (dialog) => AddDeviceScreen(device: existing, dialog: dialog));
+    final device = await _openDeviceForm((dialog) => AddDeviceScreen(
+          device: existing,
+          dialog: dialog,
+          savedAddresses: {for (final device in _devices) device.meshAddress},
+        ));
     if (!mounted || device == null) return;
     await _saveDeviceChange(() async {
       if (existing == null) {
