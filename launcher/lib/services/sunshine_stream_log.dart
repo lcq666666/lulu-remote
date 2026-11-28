@@ -49,53 +49,88 @@ class SunshineStreamLog {
     }
   }
 
-  static Future<List<SunshineStreamEvidence>> readLaunchFailures(
+  static Future<List<SunshineStreamEvidence>> readIdleSessions(
       DateTime idleSince, DateTime after, DateTime through) async {
     for (final path in _windowsLogs) {
       final text = await _tail(path);
       if (text.isNotEmpty) {
-        return parseLaunchFailures(text, idleSince, after, through);
+        return parseIdleSessions(text, idleSince, after, through);
       }
     }
     return const [];
   }
 
-  /// In stock Sunshine the RTSP handler logs this exact failure immediately
-  /// after creating a session slot, before there is a streaming connection.
-  /// Only use an unambiguous, single-slot launch within a confirmed-idle span.
-  static List<SunshineStreamEvidence> parseLaunchFailures(
+  /// Recover sessions the transport poll entirely missed. A complete, single
+  /// attempt must begin in the confirmed-idle span and end after its cursor.
+  /// Nothing here changes the live privacy or lock screen state.
+  static List<SunshineStreamEvidence> parseIdleSessions(
       String text, DateTime idleSince, DateTime after, DateTime through) {
-    final failures = <SunshineStreamEvidence>[];
+    final sessions = <SunshineStreamEvidence>[];
+    final attempt = <String>[];
     DateTime? launched;
+    var overlapped = false;
+    DateTime? latest;
+
+    void finishAttempt() {
+      final start = launched;
+      if (start == null || overlapped) return;
+      final entry = parse(attempt.join('\n'), start, through);
+      if (entry == null || !entry.end.isAfter(after)) return;
+      if (entry.failure == SunshineStreamFailure.launch &&
+          entry.end.difference(start) > const Duration(seconds: 3)) return;
+      sessions.add(entry);
+    }
+
     for (final line in const LineSplitter().convert(text)) {
       final event = _event.firstMatch(line);
       if (event == null) continue;
+      final level = event[2];
+      final message = event[3]!;
+      final count = level == 'Info' ? _sessionCount.firstMatch(message) : null;
+      final failure = _failure(level, message);
+      if (count == null &&
+          failure == null &&
+          !(level == 'Info' &&
+              (message == 'CLIENT CONNECTED' ||
+                  message == 'CLIENT DISCONNECTED' ||
+                  _timeout.hasMatch(message))) &&
+          !(level == 'Debug' && message.startsWith('Control peer address ['))) {
+        continue;
+      }
       final time = DateTime.tryParse(event[1]!);
       if (time == null || time.isBefore(idleSince) || time.isAfter(through)) {
         continue;
       }
-      final level = event[2];
-      final message = event[3]!;
-      final count = level == 'Info' ? _sessionCount.firstMatch(message) : null;
-      if (count != null) {
-        launched = count[1] == '1' ? time : null;
+      // Do not match events across a clock rollback. Drop the ambiguous
+      // attempt but retain already finished ones and let a new launch recover.
+      if (latest != null && time.isBefore(latest)) {
+        launched = null;
+        attempt.clear();
         continue;
       }
-      if (level == 'Info' &&
-          (message == 'CLIENT CONNECTED' || message == 'CLIENT DISCONNECTED')) {
-        launched = null;
+      latest = time;
+      if (count != null) {
+        if (count[1] != '1') {
+          overlapped = true;
+          continue;
+        }
+        finishAttempt();
+        launched = time;
+        overlapped = false;
+        attempt.clear();
       }
-      if (_failure(level, message) != SunshineStreamFailure.launch) continue;
-      final start = launched;
-      launched = null;
-      if (start == null ||
-          !time.isAfter(after) ||
-          time.isBefore(start) ||
-          time.difference(start) > const Duration(seconds: 3)) continue;
-      failures.add(SunshineStreamEvidence(start, time,
-          failure: SunshineStreamFailure.launch));
+      if (launched == null || overlapped) continue;
+      attempt.add(line);
+      // A launch error ends the RTSP attempt before any stream can start.
+      // Subsequent errors or slot announcements cannot belong to that attempt.
+      if (failure == SunshineStreamFailure.launch) {
+        finishAttempt();
+        launched = null;
+        attempt.clear();
+      }
     }
-    return failures;
+    finishAttempt();
+    return sessions;
   }
 
   static Future<String> _tail(String path) async {
@@ -188,7 +223,10 @@ class SunshineStreamLog {
         result =
             SunshineStreamEvidence(connected, time, peerAddress: controlPeer);
       } else if (failure != null) {
-        if (result != null || (connected != null && time.isBefore(connected))) {
+        if (result != null ||
+            (connected != null &&
+                (time.isBefore(connected) ||
+                    failure == SunshineStreamFailure.launch))) {
           return null;
         }
         result = SunshineStreamEvidence(connected ?? start, time,

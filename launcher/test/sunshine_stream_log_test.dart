@@ -22,7 +22,7 @@ void main() {
         _event(at, 'New streaming session started [active sessions: $count]');
     String failed(String at) =>
         _event(at, 'Failed to start a streaming session', level: 'Error');
-    final evidence = SunshineStreamLog.parseLaunchFailures(
+    final evidence = SunshineStreamLog.parseIdleSessions(
         [
           begun('02.250'), failed('03.000'), // Already read.
           begun('03.250'), failed('04.100'), // Crosses the last read boundary.
@@ -46,6 +46,74 @@ void main() {
             entry.peerAddress == null &&
             entry.failure == SunshineStreamFailure.launch),
         isTrue);
+  });
+
+  test('recovers a complete short stream with verified timing and peer', () {
+    final end = DateTime(2026, 11, 28, 12, 0, 5);
+    final idle = DateTime(2026, 11, 28, 12, 0, 2);
+    final log = [
+      launch,
+      _event('03.400', 'Control peer address [100.64.12.1:60421]',
+          level: 'Debug'),
+      connect,
+      _event('03.750', 'CLIENT DISCONNECTED'),
+    ].join('\n');
+    final sessions = SunshineStreamLog.parseIdleSessions(log, idle, idle, end);
+    final session = sessions.single;
+    expect(session.start, DateTime(2026, 11, 28, 12, 0, 3, 500));
+    expect(session.end, DateTime(2026, 11, 28, 12, 0, 3, 750));
+    expect(session.failure, isNull);
+    expect(session.peerAddress?.address, '100.64.12.1');
+    expect(SunshineStreamLog.parseIdleSessions(log, idle, session.end, end),
+        isEmpty);
+  });
+
+  test('idle log does not infer an end for partial or overlapping sessions',
+      () {
+    final idle = DateTime(2026, 11, 28, 12, 0, 2);
+    for (final lines in [
+      [launch, connect],
+      [connect, disconnect],
+      [launch, connect, _event('21.000', 'CLIENT CONNECTED'), disconnect],
+      [
+        launch,
+        connect,
+        _event('04.000', 'New streaming session started [active sessions: 2]'),
+        disconnect,
+      ],
+    ]) {
+      expect(
+        SunshineStreamLog.parseIdleSessions(
+            lines.join('\n'), idle, idle, sampledEnd),
+        isEmpty,
+        reason: lines.join(' | '),
+      );
+    }
+  });
+
+  test('idle log skips a clock reversal and resumes at the next launch', () {
+    final idle = DateTime(2026, 11, 28, 12, 0, 2);
+    final sessions = SunshineStreamLog.parseIdleSessions(
+      [
+        launch,
+        connect,
+        _event('03.100', 'CLIENT DISCONNECTED'),
+        _event('05.000', 'New streaming session started [active sessions: 1]'),
+        _event('06.000', 'CLIENT CONNECTED'),
+        _event('06.950', 'Display probe message'), // From another log thread.
+        _event('06.900', 'CLIENT DISCONNECTED'),
+        _event('07.000', 'New streaming session started [active sessions: 1]'),
+        _event('07.500', 'CLIENT CONNECTED'),
+        _event('07.800', 'CLIENT DISCONNECTED'),
+      ].join('\n'),
+      idle,
+      idle,
+      sampledEnd,
+    );
+    expect(sessions.map((entry) => entry.end), [
+      DateTime(2026, 11, 28, 12, 0, 6, 900),
+      DateTime(2026, 11, 28, 12, 0, 7, 800),
+    ]);
   });
 
   test('matches Sunshine activity and keeps precise local timestamps', () {

@@ -37,9 +37,9 @@ void main() {
     final launches = <(DateTime, DateTime, DateTime)>[];
     final log = ConnectionLog(
       now: () => clock,
-      launchFailures: (since, after, through) async {
+      idleSessions: (since, after, through) async {
         launches.add((since, after, through));
-        return SunshineStreamLog.parseLaunchFailures(
+        return SunshineStreamLog.parseIdleSessions(
           '[2026-11-28 12:00:01.100]: Info: New streaming session started [active sessions: 1]\n'
           '[2026-11-28 12:00:01.200]: Error: Failed to start a streaming session\n',
           since,
@@ -62,6 +62,36 @@ void main() {
     expect(failure.client, isEmpty);
   });
 
+  test('logs a short stream even if the live poll never sees it', () async {
+    final start = DateTime(2026, 11, 28, 12);
+    var clock = start;
+    const peer = '100.64.12.1';
+    final log = ConnectionLog(
+      now: () => clock,
+      idleSessions: (since, after, through) async =>
+          SunshineStreamLog.parseIdleSessions('''
+[2026-11-28 12:00:00.500]: Info: New streaming session started [active sessions: 1]
+[2026-11-28 12:00:00.750]: Debug: Control peer address [$peer:60421]
+[2026-11-28 12:00:00.800]: Info: CLIENT CONNECTED
+[2026-11-28 12:00:01.100]: Info: CLIENT DISCONNECTED
+''', since, after, through),
+      peerName: (address) async {
+        expect(address.address, peer);
+        return 'lab-pc';
+      },
+    );
+    for (final seconds in [0, 2, 4, 6, 8]) {
+      clock = start.add(Duration(seconds: seconds));
+      await log.sessionSample(false);
+    }
+    final row = (await log.read()).single;
+    expect(row.outcome, ConnectionOutcome.completed);
+    expect(row.client, 'lab-pc');
+    expect(row.duration, const Duration(milliseconds: 300));
+    expect(ConnectionLog.exportText([row]), isNot(contains(peer)));
+    expect(row.toJson().values, isNot(contains(peer)));
+  });
+
   test('discards an idle scan if a stream becomes active before it returns',
       () async {
     final started = DateTime.utc(2026, 11, 28, 12);
@@ -69,7 +99,7 @@ void main() {
     final inFlight = Completer<List<SunshineStreamEvidence>>();
     final log = ConnectionLog(
       now: () => clock,
-      launchFailures: (_, __, ___) => inFlight.future,
+      idleSessions: (_, __, ___) => inFlight.future,
     );
     await log.sessionSample(false);
     clock = started.add(const Duration(seconds: 4));
