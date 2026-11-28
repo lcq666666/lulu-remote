@@ -3,7 +3,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 /// The only place secrets live.
 ///
 /// - Windows: DPAPI-backed credential store (via flutter_secure_storage).
-/// - Android: Keystore-backed EncryptedSharedPreferences.
+/// - Android: encrypted settings protected by the Android Keystore.
 ///
 /// Nothing here is ever written to SharedPreferences, a JSON file, or a
 /// log. Callers pass a device id so per-host secrets stay separate.
