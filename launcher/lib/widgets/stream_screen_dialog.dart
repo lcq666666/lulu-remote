@@ -14,6 +14,7 @@ class _StreamScreenDialogState extends State<StreamScreenDialog> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
+        scrollable: true,
         title: const Text('选择被控屏幕'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -32,7 +33,7 @@ class _StreamScreenDialogState extends State<StreamScreenDialog> {
             ),
             const SizedBox(height: 12),
             Text(
-                '编号按被控电脑的 Sunshine 枚举顺序。也可以在 Moonlight 窗口按 Ctrl+Alt+Shift+F$_screen 切换。'),
+                '编号由被控端 Sunshine 决定，和 Windows 的主屏编号不一定相同。一次只能看一块屏幕。也可在 Moonlight 窗口按 Ctrl+Alt+Shift+F$_screen 切换。'),
           ],
         ),
         actions: [

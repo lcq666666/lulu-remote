@@ -108,6 +108,7 @@ void main() {
     await tester.tap(find.text('屏幕 2').last);
     await tester.pumpAndSettle();
     expect(find.textContaining('Ctrl+Alt+Shift+F2'), findsOneWidget);
+    expect(find.textContaining('一次只能看一块屏幕'), findsOneWidget);
     await tester.tap(find.text('切换屏幕'));
     await tester.pumpAndSettle();
     expect(selected, 2);

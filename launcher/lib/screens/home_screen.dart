@@ -19,6 +19,7 @@ import '../services/mesh_status_service.dart';
 import '../services/moonlight_launcher.dart';
 import '../services/power_service.dart';
 import '../services/secure_store.dart';
+import '../services/stream_screen_selection.dart';
 import '../services/wake_on_lan.dart';
 import '../widgets/device_card.dart';
 import '../widgets/host_tools.dart';
@@ -70,7 +71,7 @@ class _HomeScreenState extends State<HomeScreen> {
   QualityPreset _preset = QualityPreset.office1080;
   String? _connectingId;
   final _waking = <String>{};
-  final _windowsStreams = <String, Process>{};
+  final _windowsStreams = <String, StreamScreenSelection>{};
   ClipboardSyncSession? _clipboardSync;
   String? _clipboardDeviceId;
   bool _loading = true;
@@ -92,6 +93,10 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _statusTimer?.cancel();
+    for (final stream in _windowsStreams.values) {
+      stream.close();
+    }
+    _windowsStreams.clear();
     _stopClipboardSync();
     super.dispose();
   }
@@ -300,35 +305,31 @@ class _HomeScreenState extends State<HomeScreen> {
       throw MoonlightLaunchException(
           await _windowsExitMessage(earlyExit, stderr, error));
     }
-    _windowsStreams[device.id] = process;
+    if (!mounted) return;
+    final stream = StreamScreenSelection(
+      send: (screen, {required focus}) =>
+          WindowsMoonlight.switchMonitor(process.pid, screen, focus: focus),
+    );
+    _windowsStreams[device.id]?.close();
+    _windowsStreams[device.id] = stream;
     unawaited(exit.then((code) async {
-      if (_windowsStreams[device.id] == process) {
+      stream.close();
+      if (_windowsStreams[device.id] == stream) {
         _windowsStreams.remove(device.id);
         if (_clipboardDeviceId == device.id) _stopClipboardSync();
       }
       if (code != 0) _snack(await _windowsExitMessage(code, stderr, error));
     }));
     if (initialScreen != null) {
-      unawaited(_selectInitialScreen(device, process, initialScreen));
+      unawaited(_selectStreamScreen(stream, initialScreen, initial: true));
     }
   }
 
-  Future<void> _selectInitialScreen(
-      Device device, Process process, int screen) async {
-    // The stream window appears after the connection has started. A user
-    // switching to another app during startup keeps their current focus.
-    for (var attempt = 0; attempt < 24; attempt++) {
-      if (!mounted || _windowsStreams[device.id] != process) return;
-      try {
-        if (await WindowsMoonlight.switchMonitor(process.pid, screen,
-            focus: false)) return;
-      } on PlatformException {
-        break;
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 500));
-    }
-    if (mounted && _windowsStreams[device.id] == process) {
-      _snack('请在 Moonlight 中按 Ctrl+Alt+Shift+F$screen 切换被控屏幕。');
+  Future<void> _selectStreamScreen(StreamScreenSelection stream, int screen,
+      {required bool initial}) async {
+    final result = await stream.select(screen, initial: initial);
+    if (mounted && result == StreamScreenResult.unavailable) {
+      _snack('未能发送切换指令。请在 Moonlight 窗口按 Ctrl+Alt+Shift+F$screen。');
     }
   }
 
@@ -348,14 +349,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _snack('串流已结束，请重新连接后再切换。');
       return;
     }
-    try {
-      if (await WindowsMoonlight.switchMonitor(stream.pid, screen, focus: true)) {
-        return;
-      }
-    } on PlatformException {
-      // The manual Moonlight shortcut still works if Windows rejects focus.
-    }
-    _snack('请在 Moonlight 中按 Ctrl+Alt+Shift+F$screen 切换被控屏幕。');
+    await _selectStreamScreen(stream, screen, initial: false);
   }
 
   void _stopClipboardSync() {
@@ -365,9 +359,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _startClipboardSync(Device device, String code) async {
-    final process = _windowsStreams[device.id];
+    final stream = _windowsStreams[device.id];
     if (!mounted ||
-        process == null ||
+        stream == null ||
         !isPrivateTransferAddress(device.meshAddress)) {
       throw const HostToolsException('请先用设备卡进入桌面，并检查电脑的组网地址。');
     }
@@ -388,7 +382,7 @@ class _HomeScreenState extends State<HomeScreen> {
       await session.start();
       if (!mounted ||
           _clipboardSync != session ||
-          _windowsStreams[device.id] != process) {
+          _windowsStreams[device.id] != stream) {
         throw const HostToolsException('串流已结束。');
       }
       _snack('本次串流的文本剪贴板同步已开启。');
