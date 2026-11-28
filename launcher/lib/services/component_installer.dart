@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'host_setup_service.dart';
@@ -79,13 +80,10 @@ class ComponentInstaller {
   Future<void> prepareWindowsHost() async {
     final script = _bundledFile('prepare-host.ps1');
     if (script == null) throw StateError('请使用新版 LULU 安装包。');
-    final code = await _runElevated('powershell.exe', [
-      '-NoProfile',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-File',
-      '"$script"',
-    ]);
+    final code = await _runElevated(
+      'powershell.exe',
+      windowsScriptArguments(script),
+    );
     switch (code) {
       case 0:
         return;
@@ -95,6 +93,7 @@ class ComponentInstaller {
       case 740:
         throw StateError('Windows 拒绝了管理员权限。请用这台电脑的管理员账号开启远程控制（$code）。');
       case 3010:
+      case 1641:
         throw StateError('组件已安装，请在方便时重启电脑，再开启远程控制。');
       case -1:
         throw StateError('无法启动 Windows 的远程服务设置。请确认压缩包已完整解压再重试。');
@@ -127,13 +126,10 @@ class ComponentInstaller {
       await launchUrl(_tailscaleDownload, mode: LaunchMode.externalApplication);
       return 'Tailscale：安装包里没有自带脚本，已打开官网下载页，请下载后安装。';
     }
-    final result = await _runElevated('powershell.exe', [
-      '-ExecutionPolicy',
-      'Bypass',
-      '-NoProfile',
-      '-File',
-      script,
-    ]);
+    final result = await _runElevated(
+      'powershell.exe',
+      windowsScriptArguments(script),
+    );
     return switch (result) {
       0 => 'Tailscale 可以运行了，请在托盘图标里登录。',
       3010 || 1641 => 'Tailscale 安装需要重启 Windows。重启后请重新检测。',
@@ -171,6 +167,17 @@ class ComponentInstaller {
     final vendorFile = File('$exeDir\\vendor\\$name');
     return vendorFile.existsSync() ? vendorFile.path : null;
   }
+
+  // Start-Process joins ArgumentList into one command line. Preserve the
+  // literal quotes around the bundled path for ordinary installs in Program Files.
+  @visibleForTesting
+  static List<String> windowsScriptArguments(String script) => [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        '"$script"',
+      ];
 
   /// Run a program as administrator (UAC prompt once) and wait for it.
   /// Returns the process exit code, or -1 if it could not be started.

@@ -11,6 +11,7 @@
 #   - If the download fails or the SHA-256 does not match, exits 1
 #     with an error. The installer must NOT silently continue without
 #     Tailscale — the user needs it for the mesh network.
+#   - If the MSI requires a restart, exits 3010 without reporting success.
 #   - Needs internet. On an offline machine this step fails; the
 #     installer shows the error and the user retries after going online.
 
@@ -62,10 +63,14 @@ if ($actual -ne $ExpectedSha256.ToLower()) {
 
 Write-Host 'Checksum OK. Installing Tailscale (silent, no restart) ...'
 $proc = Start-Process -FilePath 'msiexec.exe' `
-    -ArgumentList @('/i', "`"$msi`"", '/qn', '/norestart') `
+    -ArgumentList @('/i', "`"$msi`"", '/qn', '/norestart', 'REBOOT=ReallySuppress') `
     -WindowStyle Hidden -Wait -PassThru
 Remove-Item $msi -Force -ErrorAction SilentlyContinue
-if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
+if ($proc.ExitCode -in @(3010, 1641)) {
+    Write-Host 'Tailscale requires a Windows restart. Restart before continuing setup.'
+    exit 3010
+}
+if ($proc.ExitCode -ne 0) {
     Write-Error "Tailscale MSI install failed with exit code $($proc.ExitCode)."
     exit 1
 }

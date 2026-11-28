@@ -23,6 +23,7 @@ function Invoke-Setup([string]$Exe, [string[]]$Arguments) {
 foreach ($scenario in @(
     @{ Name = 'success'; Tailscale = 0; Finalize = 0; ExpectedExit = 0 },
     @{ Name = 'tailscale-failure'; Tailscale = 3; Finalize = 0; ExpectedExit = 7 },
+    @{ Name = 'tailscale-restart'; Tailscale = 3010; Finalize = 0; ExpectedExit = 8 },
     @{ Name = 'readiness-failure'; Tailscale = 0; Finalize = 4; ExpectedExit = 7 }
 )) {
     $target = Join-Path $workspace $scenario.Name
@@ -40,6 +41,9 @@ foreach ($scenario in @(
     }
     if ($scenario.Tailscale -ne 0 -and (Select-String -LiteralPath $log -SimpleMatch 'Starting Sunshine startup')) {
         throw "Readiness check ran after a Tailscale failure. See $log"
+    }
+    if ($scenario.Tailscale -eq 3010 -and !(Select-String -LiteralPath $log -SimpleMatch 'Tailscale requires a Windows restart' -Quiet)) {
+        throw "Restart instruction missing. See $log"
     }
     Write-Host "$($scenario.Name) returned $code (launcher installed: $installed)."
 }

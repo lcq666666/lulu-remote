@@ -96,7 +96,7 @@ class _SetupChecklistScreenState extends State<SetupChecklistScreen>
       if (!mounted) return;
       setState(() => _installResult = result);
       await _run();
-      if (mounted) showLuluSnack(context, '安装已完成，可查看每项结果。');
+      if (mounted) showLuluSnack(context, '已更新组件检查结果，可查看每项详情。');
     } catch (_) {
       if (mounted) setState(() => _installResult = '安装未完成，请重试。');
     } finally {
