@@ -26,8 +26,14 @@ $ErrorActionPreference = 'Stop'
 
 function Test-TailscaleInstalled {
     $exe = Join-Path $env:ProgramFiles 'Tailscale\tailscale.exe'
-    if (Test-Path $exe) { return $true }
-    return [bool](Get-Command tailscale -ErrorAction SilentlyContinue)
+    if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { return $false }
+    try {
+        $probe = Start-Process -FilePath $exe -ArgumentList 'version' `
+            -WindowStyle Hidden -Wait -PassThru
+        return $probe.ExitCode -eq 0
+    } catch {
+        return $false
+    }
 }
 
 if (Test-TailscaleInstalled) {
@@ -57,7 +63,7 @@ if ($actual -ne $ExpectedSha256.ToLower()) {
 Write-Host 'Checksum OK. Installing Tailscale (silent, no restart) ...'
 $proc = Start-Process -FilePath 'msiexec.exe' `
     -ArgumentList @('/i', "`"$msi`"", '/qn', '/norestart') `
-    -Wait -PassThru
+    -WindowStyle Hidden -Wait -PassThru
 Remove-Item $msi -Force -ErrorAction SilentlyContinue
 if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
     Write-Error "Tailscale MSI install failed with exit code $($proc.ExitCode)."
@@ -65,7 +71,7 @@ if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
 }
 
 if (-not (Test-TailscaleInstalled)) {
-    Write-Error 'Tailscale MSI reported success but tailscale.exe was not found.'
+    Write-Error 'Tailscale MSI reported success but tailscale.exe could not run.'
     exit 1
 }
 

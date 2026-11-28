@@ -12,16 +12,12 @@ if (localPropertiesFile.exists()) {
     }
 }
 
-def flutterVersionCode = localProperties.getProperty('flutter.versionCode')
-if (flutterVersionCode == null) {
-    flutterVersionCode = '11'
+def versionLine = (file('../../pubspec.yaml').getText('UTF-8') =~ /(?m)^version: ([0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.]+)?)\+(\d+)\s*$/)
+if (!versionLine.find()) {
+    throw new GradleException('Invalid launcher version in pubspec.yaml')
 }
-
-def flutterVersionName = localProperties.getProperty('flutter.versionName')
-if (flutterVersionName == null) {
-    flutterVersionName = '0.3.0-beta.2'
-}
-
+def flutterVersionCode = localProperties.getProperty('flutter.versionCode', versionLine.group(2))
+def flutterVersionName = localProperties.getProperty('flutter.versionName', versionLine.group(1))
 android {
     namespace "com.lulu.remote"
     compileSdk 34
@@ -73,7 +69,9 @@ android {
 
     buildTypes {
         release {
-            signingConfig(keyPropertiesFile.exists() ? signingConfigs.release : signingConfigs.debug)
+            if (keyPropertiesFile.exists()) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 }

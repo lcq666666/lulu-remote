@@ -50,7 +50,7 @@ installer/
 2. `fetch-components.ps1` 下载 Moonlight / Sunshine，校验并写 `vendor/MANIFEST.md`，
    同时下载它们的 LICENSE；还会下载 Tailscale MSI 只做 SHA-256 校验，校验完就删掉，
    **不**把它放进安装包（原因见 `VERSIONS.md`）。
-3. Inno Setup（`iscc`）编译两个 `.iss`，产出两个安装包到 `installer/dist/`。
+3. `installer/scripts/build-installers.ps1` 读取启动器 `pubspec.yaml` 里的版本，调用 Inno Setup 编译两个 `.iss`，安装包输出到 `installer/dist/`。
 4. 推 `v*` 标签时，两个安装包 + APK 自动挂到 GitHub Release 上。
 
 本地开发构建见 `launcher/BUILD.md`——本地只做开发调试，不出正式安装包。

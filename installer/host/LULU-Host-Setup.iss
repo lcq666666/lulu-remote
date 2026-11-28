@@ -1,4 +1,4 @@
-﻿; LULU-Host-Setup.iss — LULU Remote host installer (remote PC side).
+; LULU-Host-Setup.iss — LULU Remote host installer (remote PC side).
 ;
 ; Run this on EACH remote Windows PC. One installer, Next-Next-Finish.
 ; Installs, in order:
@@ -13,10 +13,12 @@
 ;
 ; Build: CI only (see .github/workflows/build.yml):
 ;   1. installer\scripts\fetch-components.ps1   (fills installer\vendor\)
-;   2. iscc installer\host\LULU-Host-Setup.iss
+;   2. installer\scripts\build-installers.ps1
 ;
 
-#define AppVersion "0.3.0-beta.2"
+#ifndef AppVersion
+  #error Build using installer/scripts/build-installers.ps1
+#endif
 
 [Setup]
 AppId={{8D4E3B2C-5F6A-4E7B-8C9D-2F3E4A5B6C7D}
@@ -89,8 +91,7 @@ begin
     RunHostStep(ExpandConstant('{sys}\msiexec.exe'),
       '/i "' + ExpandConstant('{app}\vendor\Sunshine-Windows-AMD64-installer.msi') + '" /qn /norestart',
       'Sunshine installation', True);
-  if not FileExists(ExpandConstant('{autopf}\Tailscale\tailscale.exe')) then
-    RunHostStep(PowerShell, '-NoProfile -ExecutionPolicy Bypass -File "' +
+  RunHostStep(PowerShell, '-NoProfile -ExecutionPolicy Bypass -File "' +
       ExpandConstant('{app}\vendor\install-tailscale.ps1') + '"', 'Tailscale installation', False);
   RunHostStep(PowerShell, '-NoProfile -ExecutionPolicy Bypass -File "' +
     ExpandConstant('{app}\vendor\finalize-host.ps1') + '"', 'Sunshine startup and readiness check', False);

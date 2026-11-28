@@ -1,4 +1,4 @@
-﻿; LULU-Remote-Setup.iss — unified Windows installer.
+; LULU-Remote-Setup.iss — unified Windows installer.
 ;
 ; One installer for controlling other computers and enabling this host.
 ; The front end installs first. Components are prepared when requested.
@@ -10,13 +10,15 @@
 ; Build: CI only (see .github/workflows/build.yml):
 ;   1. flutter build windows --release
 ;   2. installer\scripts\fetch-components.ps1   (fills installer\vendor\)
-;   3. iscc installer\client\LULU-Remote-Setup.iss
+;   3. installer\scripts\build-installers.ps1
 ;
 ; The component installers are kept under {app}\vendor\ (not deleted
 ; after install) so LULU's first-run wizard can re-run them later if
 ; a component failed or was removed.
 ;
-#define AppVersion "0.3.0-beta.2"
+#ifndef AppVersion
+  #error Build using installer/scripts/build-installers.ps1
+#endif
 #define MoonlightSetup "MoonlightSetup-6.2.0.exe"
 
 [Setup]

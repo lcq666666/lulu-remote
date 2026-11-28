@@ -13,3 +13,6 @@ if ($service.Status -ne 'Running') {
     Start-Service -InputObject $service
     $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(20))
 }
+
+$service.Refresh()
+if ($service.Status -ne 'Running') { throw 'Sunshine service did not enter the Running state.' }
