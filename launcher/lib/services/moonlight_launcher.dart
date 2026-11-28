@@ -10,6 +10,7 @@ import '../models/quality_preset.dart';
 /// Launches the stock Moonlight clients. LULU never renders video itself.
 class MoonlightLauncher {
   static const _channel = MethodChannel('lulu.remote/launch');
+  static const _windowsChannel = MethodChannel('lulu/host_tray');
 
   Future<bool> isInstalled() async {
     if (Platform.isWindows) return await findWindowsClient() != null;
@@ -53,6 +54,19 @@ class MoonlightLauncher {
 
     final known = await firstWorking([bundled, ..._installedCandidates]);
     if (known != null) return known;
+
+    // Stock MSI installations with a custom directory still have a shortcut.
+    // Use only the target and run the same --version probe as other clients.
+    try {
+      final links = await _windowsChannel
+          .invokeListMethod<String>('moonlightStartMenuTargets');
+      final registered = await firstWorking(links ?? const []);
+      if (registered != null) return registered;
+    } on PlatformException {
+      // Lookup is optional; PATH remains available.
+    } on MissingPluginException {
+      // A development runner may not yet have the Windows handler.
+    }
 
     final where = '${Platform.environment['SystemRoot'] ?? r'C:\Windows'}'
         r'\System32\where.exe';

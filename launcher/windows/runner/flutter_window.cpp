@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 
+#include "moonlight_shortcut.h"
 #include "resource.h"
 #include "sunshine_session.h"
 #include "utils.h"
@@ -170,7 +171,13 @@ void FlutterWindow::HandleTrayCall(
     const flutter::MethodCall<flutter::EncodableValue>& call,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
   const auto& method = call.method_name();
-  if (method == "sunshineStreaming") {
+  if (method == "moonlightStartMenuTargets") {
+    flutter::EncodableList paths;
+    for (const auto& path : MoonlightStartMenuTargets()) {
+      paths.emplace_back(Utf8FromUtf16(path.c_str()));
+    }
+    result->Success(flutter::EncodableValue(paths));
+  } else if (method == "sunshineStreaming") {
     const auto streaming = SunshineStreaming();
     if (streaming) result->Success(flutter::EncodableValue(*streaming));
     else result->Success();

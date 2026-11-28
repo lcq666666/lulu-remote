@@ -9,6 +9,7 @@ project(runner LANGUAGES CXX)
 add_executable(${BINARY_NAME} WIN32
   "flutter_window.cpp"
   "main.cpp"
+  "moonlight_shortcut.cpp"
   "privacy_screen.cpp"
   "sunshine_session.cpp"
   "utils.cpp"
