@@ -38,7 +38,7 @@ begin
       ResultCode := RunHostStep(ExpandConstant('{sys}\msiexec.exe'),
         '/i "' + ExpandConstant('{tmp}\Sunshine-Windows-AMD64-installer.msi') +
         '" /qn /norestart REBOOT=ReallySuppress', 'Sunshine installation');
-      if ResultCode = 3010 then begin
+      if (ResultCode = 3010) or (ResultCode = 1641) then begin
         NeedsRestart := True;
         Result := 'Sunshine requires a Windows restart. Restart, then run setup again.';
         Exit;
@@ -46,8 +46,15 @@ begin
       if ResultCode <> 0 then
         RaiseException('Sunshine installation failed. Exit code ' + IntToStr(ResultCode) + '.');
     end;
-    RequireHostStep(PowerShell, TemporaryScript('install-tailscale.ps1'),
+    ResultCode := RunHostStep(PowerShell, TemporaryScript('install-tailscale.ps1'),
       'Tailscale installation');
+    if (ResultCode = 3010) or (ResultCode = 1641) then begin
+      NeedsRestart := True;
+      Result := 'Tailscale requires a Windows restart. Restart, then run setup again.';
+      Exit;
+    end;
+    if ResultCode <> 0 then
+      RaiseException('Tailscale installation failed. Exit code ' + IntToStr(ResultCode) + '.');
     RequireHostStep(PowerShell, TemporaryScript('finalize-host.ps1'),
       'Sunshine startup and readiness check');
   except
