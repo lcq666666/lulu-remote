@@ -122,7 +122,7 @@ PrivacyScreen* PrivacyScreen::input_owner_ = nullptr;
 
 std::optional<PrivacyPreview> PrivacyScreen::Show(HWND owner, bool use_image,
                                                   const std::wstring& path,
-                                                  bool live) {
+                                                  bool live, int request_id) {
   if (window_ || (live && !HasCaptureExclusion())) return std::nullopt;
   const auto instance = GetModuleHandleW(nullptr);
   WNDCLASSEXW klass{};
@@ -167,6 +167,7 @@ std::optional<PrivacyPreview> PrivacyScreen::Show(HWND owner, bool use_image,
                  reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
   }
   owner_ = owner;
+  request_id_ = request_id;
   Layout();
   ShowWindow(window_, SW_SHOWNOACTIVATE);
   return PrivacyPreview{fallback, hotkey_registered_};
@@ -249,10 +250,11 @@ void PrivacyScreen::Hide(bool notify) {
     DeleteObject(bitmap_);
     bitmap_ = nullptr;
   }
-  if (owner_) {
-    if (notify) PostMessageW(owner_, kDismissedMessage, 0, 0);
-    owner_ = nullptr;
+  if (owner_ && notify) {
+    PostMessageW(owner_, kDismissedMessage, static_cast<WPARAM>(request_id_), 0);
   }
+  owner_ = nullptr;
+  request_id_ = 0;
 }
 
 void PrivacyScreen::Layout() {

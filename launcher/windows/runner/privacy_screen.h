@@ -29,7 +29,7 @@ class PrivacyScreen {
   static constexpr UINT kDismissedMessage = WM_APP + 3;
 
   std::optional<PrivacyPreview> Show(HWND owner, bool use_image,
-                                     const std::wstring& path, bool live);
+                                     const std::wstring& path, bool live, int request_id);
   bool Renew();
   void Hide(bool notify = false);
 
@@ -44,6 +44,7 @@ class PrivacyScreen {
 
   HWND window_ = nullptr;
   HWND owner_ = nullptr;
+  int request_id_ = 0;
   HWND close_button_ = nullptr;
   HBITMAP bitmap_ = nullptr;
   static PrivacyScreen* input_owner_;
