@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 
+#include "moonlight_shortcut.h"
 #include "resource.h"
 #include "sunshine_session.h"
 #include "utils.h"
@@ -244,6 +245,12 @@ void FlutterWindow::HandleTrayCall(
     }
     result->Success(flutter::EncodableValue(
         SwitchStreamMonitor(static_cast<DWORD>(*pid), *screen, *focus)));
+  } else if (method == "moonlightStartMenuTargets") {
+    flutter::EncodableList paths;
+    for (const auto& path : MoonlightStartMenuTargets()) {
+      paths.emplace_back(Utf8FromUtf16(path.c_str()));
+    }
+    result->Success(flutter::EncodableValue(paths));
   } else if (method == "sunshineStreaming") {
     const auto streaming = SunshineStreaming();
     if (streaming) result->Success(flutter::EncodableValue(*streaming));

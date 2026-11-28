@@ -169,6 +169,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Set-Location ../pairing_worker
           dart test test/worker_process_test.dart
+      - name: Test Moonlight shortcut discovery on Windows
+        shell: pwsh
+        run: ./launcher/test/native/test-moonlight-shortcut.ps1
       - name: Fetch Moonlight + Sunshine (verify hashes, fetch LICENSEs)
         shell: pwsh
         run: ./installer/scripts/fetch-components.ps1
