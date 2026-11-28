@@ -3,9 +3,10 @@ import 'package:flutter/material.dart';
 import '../app.dart';
 import '../models/device.dart';
 import '../services/mesh_status_service.dart';
+import '../services/power_service.dart';
 import 'lulu_ui.dart';
 
-enum _DeviceAction { transfer, edit, delete, help }
+enum _DeviceAction { transfer, edit, delete, help, restart, shutdown, signOut }
 
 class DeviceCard extends StatefulWidget {
   const DeviceCard(
@@ -20,6 +21,7 @@ class DeviceCard extends StatefulWidget {
       this.mobile = false,
       this.busy = false,
       this.onTransfer,
+      this.onPower,
       this.onEdit,
       this.onDelete,
       this.onDisconnect,
@@ -35,6 +37,7 @@ class DeviceCard extends StatefulWidget {
   final VoidCallback onConnect;
   final String? connectLabel;
   final VoidCallback? onTransfer;
+  final ValueChanged<PowerAction>? onPower;
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
   final VoidCallback? onDisconnect;
@@ -52,6 +55,12 @@ class _DeviceCardState extends State<DeviceCard> {
 
   void _runAction(_DeviceAction action) {
     switch (action) {
+      case _DeviceAction.restart:
+        widget.onPower?.call(PowerAction.restart);
+      case _DeviceAction.shutdown:
+        widget.onPower?.call(PowerAction.shutdown);
+      case _DeviceAction.signOut:
+        widget.onPower?.call(PowerAction.signOut);
       case _DeviceAction.transfer:
         widget.onTransfer?.call();
       case _DeviceAction.edit:
@@ -112,6 +121,14 @@ class _DeviceCardState extends State<DeviceCard> {
                           title: const Text('连接遇到问题'),
                           onTap: () =>
                               Navigator.pop(context, _DeviceAction.help)),
+                    if (widget.onPower != null)
+                      for (final action in PowerAction.values)
+                        ListTile(
+                          leading: const Icon(Icons.power_settings_new),
+                          title: Text(action.label),
+                          onTap: () => Navigator.pop(context,
+                              _DeviceAction.values.byName(action.name)),
+                        ),
                     if (widget.onDelete != null)
                       ListTile(
                           iconColor: error,
@@ -176,7 +193,8 @@ class _DeviceCardState extends State<DeviceCard> {
                     textAlign: TextAlign.center)),
           ]),
     );
-    final actions = widget.onTransfer != null ||
+    final actions = widget.onPower != null ||
+        widget.onTransfer != null ||
         widget.onEdit != null ||
         widget.onDelete != null ||
         widget.onAndroidHelp != null;
@@ -221,6 +239,13 @@ class _DeviceCardState extends State<DeviceCard> {
                   if (widget.onEdit != null)
                     const PopupMenuItem(
                         value: _DeviceAction.edit, child: Text('编辑')),
+                  if (widget.onPower != null) ...[
+                    const PopupMenuDivider(),
+                    for (final action in PowerAction.values)
+                      PopupMenuItem(
+                          value: _DeviceAction.values.byName(action.name),
+                          child: Text(action.label)),
+                  ],
                   if (widget.onDelete != null)
                     PopupMenuItem(
                         value: _DeviceAction.delete,

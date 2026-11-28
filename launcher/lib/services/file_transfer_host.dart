@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'file_transfer_service.dart';
 import 'mesh_status_service.dart';
+import 'power_service.dart';
 import 'secure_store.dart';
 
 bool isPrivateTransferAddress(String address) {
@@ -29,6 +30,7 @@ class FileTransferHost {
   final _listeners = <String, HttpServer>{};
   FileTransferServer? _handler;
   Future<void> _fileCleanup = Future<void>.value();
+  PowerServer? _power;
   Future<String>? _readingCode;
   int _settingsGeneration = 0;
   Timer? _timer;
@@ -126,7 +128,30 @@ class FileTransferHost {
     return _fileCleanup;
   }
 
+  Future<void> setPowerEnabled(bool enabled) async {
+    _settingsGeneration++;
+    if (!enabled) _disablePower();
+    await PowerAccess.instance.setEnabled(enabled);
+    _settingsGeneration++;
+    await refresh();
+  }
+
+  Future<String> rotatePowerCode() async {
+    _settingsGeneration++;
+    _disablePower();
+    final code = await PowerAccess.instance.rotate();
+    _settingsGeneration++;
+    await refresh();
+    return code;
+  }
+
+  void _disablePower() {
+    _power?.enabled = false;
+    _power = null;
+  }
+
   Future<void> _disableCurrent() async {
+    _disablePower();
     await _retireFileReceiver();
     final listeners = _listeners.values.toList();
     _listeners.clear();
@@ -138,28 +163,40 @@ class FileTransferHost {
   Future<void> _refresh() async {
     final generation = _settingsGeneration;
     try {
-      if (_timer == null || !await isEnabled()) {
+      final fileEnabled = await isEnabled();
+      final powerEnabled = await PowerAccess.instance.isEnabled();
+      if (generation != _settingsGeneration) return;
+      if (_timer == null || !(fileEnabled || powerEnabled)) {
         await _disableCurrent();
         return;
       }
-      final path = await directoryPath();
-      final secret = await code();
+      final path = fileEnabled ? await directoryPath() : null;
+      final secret = fileEnabled ? await code() : null;
+      final powerSecret =
+          powerEnabled ? await PowerAccess.instance.code() : null;
       final addresses = (await MeshStatusService().localAddresses())
           .where((entry) =>
               entry.network != null && isPrivateTransferAddress(entry.address))
           .map((entry) => entry.address)
           .toSet();
-      if (_timer == null ||
-          !await isEnabled() ||
-          generation != _settingsGeneration) return;
+      if (_timer == null || generation != _settingsGeneration) return;
       final previous = _handler;
-      if (previous == null ||
+      if (secret == null || path == null) {
+        await _retireFileReceiver();
+        if (_timer == null || generation != _settingsGeneration) return;
+      } else if (previous == null ||
           previous.code != secret ||
           previous.receiveDirectory.path != path) {
         await _retireFileReceiver();
         if (_timer == null || generation != _settingsGeneration) return;
         _handler =
             FileTransferServer(code: secret, receiveDirectory: Directory(path));
+      }
+      if (powerSecret == null) {
+        _disablePower();
+      } else if (_power?.code != powerSecret) {
+        _disablePower();
+        _power = PowerServer(code: powerSecret, run: PowerServer.runOnWindows);
       }
       final expired = _listeners.keys
           .where((address) => !addresses.contains(address))
@@ -170,10 +207,7 @@ class FileTransferHost {
       for (final address in addresses.difference(_listeners.keys.toSet())) {
         try {
           final listener = await HttpServer.bind(address, fileTransferPort);
-          if (_timer == null ||
-              _handler == null ||
-              !await isEnabled() ||
-              generation != _settingsGeneration) {
+          if (_timer == null || generation != _settingsGeneration) {
             await listener.close(force: true);
             continue;
           }
@@ -192,13 +226,19 @@ class FileTransferHost {
   }
 
   void _dispatch(HttpRequest request) {
-    final handler = _handler;
     final remote = request.connectionInfo?.remoteAddress.address;
-    if (handler != null && remote != null && isPrivateTransferAddress(remote)) {
-      unawaited(handler.handle(request));
-    } else {
-      request.response.statusCode = HttpStatus.forbidden;
-      unawaited(request.response.close());
+    if (remote != null && isPrivateTransferAddress(remote)) {
+      if (PowerServer.handles(request.uri.path)) {
+        if (_power case final power?) {
+          unawaited(power.handle(request));
+          return;
+        }
+      } else if (_handler case final files?) {
+        unawaited(files.handle(request));
+        return;
+      }
     }
+    request.response.statusCode = HttpStatus.forbidden;
+    unawaited(request.response.close());
   }
 }
