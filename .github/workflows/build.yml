@@ -278,13 +278,27 @@ jobs:
               "--dart-define=LULU_ACTIVATION_SERVER=$ACTIVATION_SERVER")
           fi
           (cd launcher && flutter pub get && flutter build apk "--$mode" "${activation[@]}")
-          version="$(sed -nE 's/^version: ([0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.]+)?\+[0-9]+)$/\1/p' launcher/pubspec.yaml)"
-          if [[ -z "$version" ]]; then exit 1; fi
-          (cd pairing_worker/android_app && flutter pub get && flutter build apk "--$mode" --build-name "${version%+*}" --build-number "${version##*+}")
+          (cd pairing_worker/android_app && flutter pub get && flutter build apk "--$mode")
           mkdir -p android-dist
           cp "launcher/build/app/outputs/flutter-apk/app-$mode.apk" "android-dist/LULU-Remote-$mode.apk"
           cp "pairing_worker/android_app/build/app/outputs/flutter-apk/app-$mode.apk" "android-dist/LULU-Pairing-Worker-$mode.apk"
-          git archive --format=zip --output=android-dist/LULU-Pairing-Worker-Source.zip HEAD pairing_worker installer/scripts/build-pairing-worker.ps1 .github/workflows/build.yml
+          git archive --format=zip --output=android-dist/LULU-Pairing-Worker-Source.zip HEAD pairing_worker launcher/pubspec.yaml installer/scripts/build-pairing-worker.ps1 .github/workflows/build.yml
+      - name: Verify Android package versions
+        run: |
+          version="$(sed -nE 's/^version: ([0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.]+)?\+[0-9]+)$/\1/p' launcher/pubspec.yaml)"
+          if [[ -z "$version" ]]; then exit 1; fi
+          aapt="$(find "$ANDROID_HOME/build-tools" -name aapt | sort -V | tail -n 1)"
+          verify_package() {
+            local info expected
+            info="$("$aapt" dump badging "$1")" || return 1
+            expected="package: name='$2' versionCode='${version##*+}' versionName='${version%+*}'"
+            if [[ "${info%%$'\n'*}" != "$expected" && "${info%%$'\n'*}" != "$expected "* ]]; then
+              echo "::error::Unexpected package name or version in $1"
+              return 1
+            fi
+          }
+          verify_package android-dist/LULU-Remote-*.apk com.lulu.remote
+          verify_package android-dist/LULU-Pairing-Worker-*.apk com.lulu.remote.pairing
       - name: Verify matching Android signatures
         run: |
           apksigner="$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)"
